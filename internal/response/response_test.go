@@ -6,26 +6,26 @@ import (
 )
 
 func TestEnvelopeMarshalsFlat(t *testing.T) {
-	data, err := json.Marshal(Envelope{Success: true})
+	data, err := json.Marshal(Envelope{Status: StatusStarted})
 	if err != nil {
 		t.Fatalf("Marshal returned error: %v", err)
 	}
-	if got, want := string(data), `{"success":true}`; got != want {
-		t.Errorf("Marshal(Envelope{Success:true}) = %s, want %s", got, want)
+	if got, want := string(data), `{"status":"STARTED"}`; got != want {
+		t.Errorf("Marshal(Envelope{Status:StatusStarted}) = %s, want %s", got, want)
 	}
 
-	data, err = json.Marshal(Envelope{Success: false, Message: "boom"})
+	data, err = json.Marshal(Envelope{Status: StatusFailed, Message: "boom"})
 	if err != nil {
 		t.Fatalf("Marshal returned error: %v", err)
 	}
-	if got, want := string(data), `{"success":false,"message":"boom"}`; got != want {
+	if got, want := string(data), `{"status":"FAILED","message":"boom"}`; got != want {
 		t.Errorf("Marshal(Envelope{...}) = %s, want %s", got, want)
 	}
 }
 
 func TestWorkflowStartedEmbedsEnvelopeFlat(t *testing.T) {
 	ws := WorkflowStarted{
-		Envelope:   Envelope{Success: true, Message: "workflow started"},
+		Envelope:   Envelope{Status: StatusStarted},
 		WorkflowID: "order-1",
 		RunID:      "run-1",
 	}
@@ -44,8 +44,7 @@ func TestWorkflowStartedEmbedsEnvelopeFlat(t *testing.T) {
 	// same JSON object as WorkflowStarted's own fields, not nested under an
 	// "Envelope" key - that's the point of using composition here.
 	want := map[string]any{
-		"success":    true,
-		"message":    "workflow started",
+		"status":     "STARTED",
 		"workflowId": "order-1",
 		"runId":      "run-1",
 	}
@@ -56,5 +55,24 @@ func TestWorkflowStartedEmbedsEnvelopeFlat(t *testing.T) {
 	}
 	if _, ok := decoded["Envelope"]; ok {
 		t.Errorf("expected Envelope to be flattened, not nested: %s", data)
+	}
+}
+
+func TestStatusIsError(t *testing.T) {
+	errorStatuses := []Status{
+		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
+		StatusInvalidRequest, StatusValidationFailed, StatusFailed,
+	}
+	for _, s := range errorStatuses {
+		if !s.IsError() {
+			t.Errorf("%s.IsError() = false, want true", s)
+		}
+	}
+
+	successStatuses := []Status{StatusValid, StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated}
+	for _, s := range successStatuses {
+		if s.IsError() {
+			t.Errorf("%s.IsError() = true, want false", s)
+		}
 	}
 }

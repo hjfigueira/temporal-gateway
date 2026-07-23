@@ -22,10 +22,13 @@ info:
     UseExisting, or TerminateExisting), workflowExecutionErrorWhenAlreadyStarted,
     retryPolicy (initialInterval, backoffCoefficient, maximumInterval,
     maximumAttempts, nonRetryableErrorTypes), cronSchedule, startDelay
-    (mutually exclusive with cronSchedule), memo, searchAttributes,
-    enableEagerStart, staticSummary, staticDetails, and priority
-    (priorityKey, fairnessKey, fairnessWeight). This file is referenced by
-    the main gateway config (see config.yml -> apiSpec).
+    (mutually exclusive with cronSchedule), memo, enableEagerStart,
+    staticSummary, staticDetails, priority (priorityKey, fairnessKey,
+    fairnessWeight), and searchAttributes - a list of typed attributes, each
+    "{name, type, value}" where type is one of string, keyword, bool, int,
+    float, time (an RFC3339 string), or keywordList (a list of strings).
+    This file is referenced by the main gateway config (see config.yml ->
+    apiSpec).
 
 paths:
   /orders:
@@ -53,8 +56,8 @@ paths:
           workflowType: OrderWorkflow
           workflowId: "order-{body.orderId}"
           taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
-          idReusePolicy: RejectDuplicate
-          workflowIdConflictPolicy: UseExisting
+          idReusePolicy: AllowDuplicate
+          workflowIdConflictPolicy: TerminateExisting
           workflowExecutionTimeout: 24h
           workflowRunTimeout: 1h
           workflowTaskTimeout: 10s
@@ -72,6 +75,7 @@ paths:
           workflowType: NotificationWorkflow
           workflowId: "order-{body.orderId}-notification"
           taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+          idReusePolicy: RejectDuplicate
           startDelay: 5s
       responses:
         "202":

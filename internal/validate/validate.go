@@ -19,7 +19,7 @@ import (
 const rootField = "_body"
 
 // Result is the outcome of validating a payload against a schema: the
-// shared response.Envelope (success/message) plus, on failure, every rule
+// shared response.Envelope (status/message) plus, on failure, every rule
 // broken per field.
 type Result struct {
 	response.Envelope
@@ -34,7 +34,7 @@ func Schema(schema map[string]any, data any) Result {
 	walk(schema, data, "", &violations)
 
 	if len(violations) == 0 {
-		return Result{Envelope: response.Envelope{Success: true}}
+		return Result{Envelope: response.Envelope{Status: response.StatusValid}}
 	}
 
 	fields := make(map[string][]string, len(violations))
@@ -48,7 +48,7 @@ func Schema(schema map[string]any, data any) Result {
 
 	return Result{
 		Envelope: response.Envelope{
-			Success: false,
+			Status:  response.StatusValidationFailed,
 			Message: fmt.Sprintf("validation failed: %d issue(s) found", len(violations)),
 		},
 		Fields: fields,

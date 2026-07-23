@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +43,12 @@ func TestLoadStartWorkflowOptions(t *testing.T) {
           memo:
             team: platform
           searchAttributes:
-            CustomStringField: widget
+            - name: CustomStringField
+              type: string
+              value: widget
+            - name: CustomIntField
+              type: int
+              value: 42
           enableEagerStart: true
           staticSummary: "Widget creation"
           staticDetails: "Created via gateway"
@@ -75,6 +81,15 @@ func TestLoadStartWorkflowOptions(t *testing.T) {
 	}
 	if binding.Memo["team"] != "platform" {
 		t.Errorf("Memo not parsed correctly: %+v", binding.Memo)
+	}
+	if len(binding.SearchAttributes) != 2 {
+		t.Fatalf("expected 2 search attributes, got %+v", binding.SearchAttributes)
+	}
+	if got := binding.SearchAttributes[0]; got.Name != "CustomStringField" || got.Type != "string" || got.Value != "widget" {
+		t.Errorf("SearchAttributes[0] not parsed correctly: %+v", got)
+	}
+	if got := binding.SearchAttributes[1]; got.Name != "CustomIntField" || got.Type != "int" || got.Value != 42 {
+		t.Errorf("SearchAttributes[1] not parsed correctly: %+v", got)
 	}
 }
 
@@ -112,6 +127,143 @@ func TestValidateRejectsCronAndStartDelayTogether(t *testing.T) {
 `
 	if _, err := loadSpec(t, yamlContent); err == nil {
 		t.Fatal("expected an error when cronSchedule and startDelay are both set")
+	}
+}
+
+func TestValidateAllowsTerminateIfRunningAlone(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          idReusePolicy: TerminateIfRunning
+`
+	if _, err := loadSpec(t, yamlContent); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidateRejectsTerminateIfRunningWithConflictPolicy(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          idReusePolicy: TerminateIfRunning
+          workflowIdConflictPolicy: Fail
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error combining idReusePolicy TerminateIfRunning with an explicit workflowIdConflictPolicy")
+	}
+	if !strings.Contains(err.Error(), "TerminateIfRunning") {
+		t.Errorf("error %q does not mention TerminateIfRunning", err.Error())
+	}
+}
+
+func TestValidateRejectsUnknownSearchAttributeType(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          searchAttributes:
+            - name: CustomField
+              type: bogus
+              value: x
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for an unknown searchAttributes type")
+	}
+	if !strings.Contains(err.Error(), "unknown type") {
+		t.Errorf("error %q does not mention the unknown type", err.Error())
+	}
+}
+
+func TestValidateRejectsSearchAttributeMissingName(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          searchAttributes:
+            - type: string
+              value: x
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for a searchAttributes entry with no name")
+	}
+	if !strings.Contains(err.Error(), "missing name") {
+		t.Errorf("error %q does not mention the missing name", err.Error())
+	}
+}
+
+func TestValidateRejectsSearchAttributeValueTypeMismatch(t *testing.T) {
+	tests := []struct {
+		name   string
+		saType string
+		value  string
+	}{
+		{"string type with non-string value", "string", "value: 123"},
+		{"bool type with non-bool value", "bool", `value: "yes"`},
+		{"int type with non-int value", "int", `value: "1"`},
+		{"float type with non-numeric value", "float", `value: "1.5"`},
+		{"time type with an invalid timestamp", "time", `value: "not-a-timestamp"`},
+		{"keywordList type with a scalar value", "keywordList", `value: "not-a-list"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			yamlContent := specHeader + fmt.Sprintf(`      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          searchAttributes:
+            - name: CustomField
+              type: %s
+              %s
+`, tt.saType, tt.value)
+			if _, err := loadSpec(t, yamlContent); err == nil {
+				t.Fatalf("expected an error for a %s search attribute with a mismatched value", tt.saType)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsValidSearchAttributes(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        - action: startWorkflow
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+          searchAttributes:
+            - name: CustomStringField
+              type: string
+              value: widget
+            - name: CustomKeywordField
+              type: keyword
+              value: gold
+            - name: CustomBoolField
+              type: bool
+              value: true
+            - name: CustomIntField
+              type: int
+              value: 42
+            - name: CustomFloatField
+              type: float
+              value: 3.5
+            - name: CustomTimeField
+              type: time
+              value: "2026-01-02T15:04:05Z"
+            - name: CustomKeywordListField
+              type: keywordList
+              value: ["a", "b"]
+`
+	if _, err := loadSpec(t, yamlContent); err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
 }
 

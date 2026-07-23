@@ -39,35 +39,57 @@ const (
 //
 // The fields below WorkflowID mirror go.temporal.io/sdk/client's
 // StartWorkflowOptions and apply only to ActionStartWorkflow. Durations are
-// strings parsed with time.ParseDuration (e.g. "30s", "5m"). Two
-// StartWorkflowOptions fields are deliberately not exposed here:
-// TypedSearchAttributes, superseded by the simpler SearchAttributes map,
-// which needs no SDK-specific typed key builders to express in YAML; and
+// strings parsed with time.ParseDuration (e.g. "30s", "5m"). One
+// StartWorkflowOptions field is deliberately not exposed here:
 // VersioningOverride, an interface type for worker-deployment versioning
-// that has no simple scalar/map representation.
+// that has no simple scalar/map representation. SearchAttributes uses the
+// SDK's typed search attribute API (client.StartWorkflowOptions.
+// SearchAttributes, an untyped map, is deprecated in favor of
+// TypedSearchAttributes).
 type TemporalBinding struct {
-	Action        TemporalAction `yaml:"action"`
-	TaskQueue     string         `yaml:"taskQueue,omitempty"`
-	WorkflowType  string         `yaml:"workflowType,omitempty"`
-	WorkflowID    string         `yaml:"workflowId,omitempty"`
-	SignalName    string         `yaml:"signalName,omitempty"`
-	QueryType     string         `yaml:"queryType,omitempty"`
-	IDReusePolicy string         `yaml:"idReusePolicy,omitempty"`
+	Action       TemporalAction `yaml:"action"`
+	TaskQueue    string         `yaml:"taskQueue,omitempty"`
+	WorkflowType string         `yaml:"workflowType,omitempty"`
+	WorkflowID   string         `yaml:"workflowId,omitempty"`
+	SignalName   string         `yaml:"signalName,omitempty"`
+	QueryType    string         `yaml:"queryType,omitempty"`
+	// IDReusePolicy additionally accepts "TerminateIfRunning": terminate the
+	// current run if one is already running, otherwise allow reuse of the
+	// ID. The underlying Temporal enum for this is deprecated, so the
+	// dispatcher implements it via the documented replacement instead -
+	// WorkflowIDReusePolicy AllowDuplicate combined with
+	// WorkflowIDConflictPolicy TerminateExisting - which is why it can't be
+	// combined with an explicit WorkflowIDConflictPolicy below.
+	IDReusePolicy string `yaml:"idReusePolicy,omitempty"`
 
-	WorkflowExecutionTimeout                 string         `yaml:"workflowExecutionTimeout,omitempty"`
-	WorkflowRunTimeout                       string         `yaml:"workflowRunTimeout,omitempty"`
-	WorkflowTaskTimeout                      string         `yaml:"workflowTaskTimeout,omitempty"`
-	WorkflowIDConflictPolicy                 string         `yaml:"workflowIdConflictPolicy,omitempty"`
-	WorkflowExecutionErrorWhenAlreadyStarted bool           `yaml:"workflowExecutionErrorWhenAlreadyStarted,omitempty"`
-	RetryPolicy                              *RetryPolicy   `yaml:"retryPolicy,omitempty"`
-	CronSchedule                             string         `yaml:"cronSchedule,omitempty"`
-	Memo                                     map[string]any `yaml:"memo,omitempty"`
-	SearchAttributes                         map[string]any `yaml:"searchAttributes,omitempty"`
-	EnableEagerStart                         bool           `yaml:"enableEagerStart,omitempty"`
-	StartDelay                               string         `yaml:"startDelay,omitempty"`
-	StaticSummary                            string         `yaml:"staticSummary,omitempty"`
-	StaticDetails                            string         `yaml:"staticDetails,omitempty"`
-	Priority                                 *Priority      `yaml:"priority,omitempty"`
+	WorkflowExecutionTimeout                 string            `yaml:"workflowExecutionTimeout,omitempty"`
+	WorkflowRunTimeout                       string            `yaml:"workflowRunTimeout,omitempty"`
+	WorkflowTaskTimeout                      string            `yaml:"workflowTaskTimeout,omitempty"`
+	WorkflowIDConflictPolicy                 string            `yaml:"workflowIdConflictPolicy,omitempty"`
+	WorkflowExecutionErrorWhenAlreadyStarted bool              `yaml:"workflowExecutionErrorWhenAlreadyStarted,omitempty"`
+	RetryPolicy                              *RetryPolicy      `yaml:"retryPolicy,omitempty"`
+	CronSchedule                             string            `yaml:"cronSchedule,omitempty"`
+	Memo                                     map[string]any    `yaml:"memo,omitempty"`
+	SearchAttributes                         []SearchAttribute `yaml:"searchAttributes,omitempty"`
+	EnableEagerStart                         bool              `yaml:"enableEagerStart,omitempty"`
+	StartDelay                               string            `yaml:"startDelay,omitempty"`
+	StaticSummary                            string            `yaml:"staticSummary,omitempty"`
+	StaticDetails                            string            `yaml:"staticDetails,omitempty"`
+	Priority                                 *Priority         `yaml:"priority,omitempty"`
+}
+
+// SearchAttribute is one typed search attribute to set on a started
+// workflow. Unlike a plain map, each entry must declare its Type: Temporal's
+// typed search attribute API (go.temporal.io/sdk/temporal's
+// SearchAttributeKeyString, SearchAttributeKeyKeyword, etc.) keys each
+// attribute by name *and* type, and the server must have that name
+// registered with a matching type. Type is one of "string", "keyword",
+// "bool", "int", "float", "time" (an RFC3339 string), or "keywordList" (a
+// list of strings); Value's shape must match Type.
+type SearchAttribute struct {
+	Name  string `yaml:"name"`
+	Type  string `yaml:"type"`
+	Value any    `yaml:"value"`
 }
 
 // RetryPolicy mirrors go.temporal.io/sdk/temporal.RetryPolicy.
@@ -177,6 +199,68 @@ var validIDConflictPolicies = map[string]bool{
 	"TerminateExisting": true,
 }
 
+// validSearchAttributeTypes mirrors the SearchAttribute.Type values the
+// dispatcher understands (see internal/temporal.searchAttributeUpdate),
+// each corresponding to one of the SDK's typed search attribute key
+// constructors.
+var validSearchAttributeTypes = map[string]bool{
+	"string":      true,
+	"keyword":     true,
+	"bool":        true,
+	"int":         true,
+	"float":       true,
+	"time":        true,
+	"keywordList": true,
+}
+
+// validateSearchAttributeValue checks that sa.Value's shape matches its
+// declared Type, so a mismatch is caught at spec-load time rather than
+// surfacing as a dispatch-time error on the first request. Assumes
+// validSearchAttributeTypes[sa.Type] is already true.
+func validateSearchAttributeValue(sa SearchAttribute) error {
+	switch sa.Type {
+	case "string", "keyword":
+		if _, ok := sa.Value.(string); !ok {
+			return fmt.Errorf("value must be a string for type %q", sa.Type)
+		}
+	case "bool":
+		if _, ok := sa.Value.(bool); !ok {
+			return fmt.Errorf("value must be a boolean for type %q", sa.Type)
+		}
+	case "int":
+		switch sa.Value.(type) {
+		case int, int64:
+		default:
+			return fmt.Errorf("value must be an integer for type %q", sa.Type)
+		}
+	case "float":
+		switch sa.Value.(type) {
+		case float64, float32, int, int64:
+		default:
+			return fmt.Errorf("value must be a number for type %q", sa.Type)
+		}
+	case "time":
+		s, ok := sa.Value.(string)
+		if !ok {
+			return fmt.Errorf("value must be an RFC3339 string for type %q", sa.Type)
+		}
+		if _, err := time.Parse(time.RFC3339, s); err != nil {
+			return fmt.Errorf("value %q is not a valid RFC3339 timestamp: %w", s, err)
+		}
+	case "keywordList":
+		list, ok := sa.Value.([]any)
+		if !ok {
+			return fmt.Errorf("value must be a list of strings for type %q", sa.Type)
+		}
+		for _, v := range list {
+			if _, ok := v.(string); !ok {
+				return fmt.Errorf("value must be a list of strings for type %q", sa.Type)
+			}
+		}
+	}
+	return nil
+}
+
 // validate checks every operation's x-temporal bindings and returns a
 // single error joining every problem found (via errors.Error(), one per
 // line), rather than stopping at the first, so a misconfigured spec can be
@@ -218,6 +302,9 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 		if !validIDConflictPolicies[t.WorkflowIDConflictPolicy] {
 			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown workflowIdConflictPolicy %q", method, path, i, t.WorkflowIDConflictPolicy))
 		}
+		if t.IDReusePolicy == "TerminateIfRunning" && t.WorkflowIDConflictPolicy != "" {
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: idReusePolicy TerminateIfRunning cannot be combined with workflowIdConflictPolicy (TerminateIfRunning already implies TerminateExisting)", method, path, i))
+		}
 		if t.CronSchedule != "" && t.StartDelay != "" {
 			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: cronSchedule and startDelay cannot both be set", method, path, i))
 		}
@@ -239,6 +326,18 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 			}
 			if _, err := time.ParseDuration(d.value); err != nil {
 				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: invalid %s %q: %w", method, path, i, d.name, d.value, err))
+			}
+		}
+		for j, sa := range t.SearchAttributes {
+			if sa.Name == "" {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: missing name", method, path, i, j))
+			}
+			if !validSearchAttributeTypes[sa.Type] {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: unknown type %q", method, path, i, j, sa.Type))
+				continue
+			}
+			if err := validateSearchAttributeValue(sa); err != nil {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d] %q: %w", method, path, i, j, sa.Name, err))
 			}
 		}
 	case ActionSignalWorkflow:

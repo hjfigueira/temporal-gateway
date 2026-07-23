@@ -63,10 +63,40 @@ type dispatchOutcome struct {
 	err        error
 }
 
+// statusGetter is satisfied by every response type in internal/response
+// (via Envelope's promoted GetStatus method), letting dispatchHandler read
+// a dispatch outcome's Status without a type switch over every concrete
+// response type.
+type statusGetter interface {
+	GetStatus() response.Status
+}
+
+// succeeded reports whether a dispatch outcome actually did what was
+// asked. A nil Go error alone isn't enough: e.g. a startWorkflow binding
+// can return successfully while attaching to an already-existing run
+// instead of creating a new one (see internal/temporal.classifyExistingRun),
+// which is a Status.IsError() outcome despite there being no error.
+func (o dispatchOutcome) succeeded() bool {
+	if o.err != nil {
+		return false
+	}
+	if sg, ok := o.result.(statusGetter); ok {
+		return !sg.GetStatus().IsError()
+	}
+	return true
+}
+
 // dispatchHandler resolves path params and the JSON body, then renders and
 // dispatches each of the operation's x-temporal bindings in parallel, so
 // one HTTP call can trigger several Temporal actions at once and a failure
-// in one binding doesn't prevent the others from starting.
+// in one binding doesn't prevent the others from starting. When more than
+// one binding is dispatched, the response is a response.BatchResult: a
+// top-level status of WORKFLOW_STARTED if every binding succeeded,
+// WORKFLOW_NOT_STARTED if none did, or WORKFLOW_PARTIALLY_STARTED if it's a
+// genuine mix of both - plus each binding's own per-item result (each
+// naming which workflow it's about). Only that genuine-mix case is reported
+// under HTTP 207 Multi-Status; a uniform outcome (all started, or none did)
+// gets an ordinary single status code.
 func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
 	bindings := route.Operation.Temporal
@@ -82,12 +112,12 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 		if r.Body != nil {
 			defer r.Body.Close()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-				writeJSON(w, http.StatusBadRequest, response.Envelope{Success: false, Message: "invalid JSON body: " + err.Error()})
+				writeJSON(w, http.StatusBadRequest, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
 				return
 			}
 		}
 
-		if result := validateBody(requestBody, body); !result.Success {
+		if result := validateBody(requestBody, body); result.Status.IsError() {
 			writeJSON(w, http.StatusBadRequest, result)
 			return
 		}
@@ -107,58 +137,133 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 		}
 		wg.Wait()
 
-		results := make([]any, 0, len(bindings))
-		for _, outcome := range outcomes {
+		items := make([]any, len(outcomes))
+		statuses := make([]int, len(outcomes))
+		succeeded := 0
+		for i, outcome := range outcomes {
+			binding := bindings[i]
+
 			if outcome.err != nil {
+				respStatus, httpStatus, message := errorResponse(outcome.err)
+				statuses[i] = httpStatus
 				logger.Error("temporal dispatch failed",
 					"operation_id", route.Operation.OperationID,
 					"method", route.Method,
 					"path", route.Path,
 					"workflow_id", outcome.workflowID,
+					"workflow_type", binding.WorkflowType,
 					"error", outcome.err,
 				)
-				status, message := errorResponse(outcome.err)
-				writeJSON(w, status, response.Envelope{Success: false, Message: message})
-				return
+				items[i] = response.Envelope{
+					Status:  respStatus,
+					Message: fmt.Sprintf("%s: %s", workflowLabel(binding, outcome.workflowID), message),
+				}
+				continue
 			}
 
-			logger.Info("handled request",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"workflow_id", outcome.workflowID,
-			)
-			results = append(results, outcome.result)
+			items[i] = outcome.result
+			if outcome.succeeded() {
+				succeeded++
+				statuses[i] = statusByAction[binding.Action]
+				if statuses[i] == 0 {
+					statuses[i] = http.StatusOK
+				}
+				logger.Info("handled request",
+					"operation_id", route.Operation.OperationID,
+					"method", route.Method,
+					"path", route.Path,
+					"workflow_id", outcome.workflowID,
+				)
+				continue
+			}
+
+			// Dispatch returned no Go error, but the result itself reports
+			// a non-success outcome (e.g. startWorkflow attached to an
+			// already-existing run instead of creating one) - treat it the
+			// same as a failure for status-code and batch-accounting
+			// purposes.
+			statuses[i] = http.StatusConflict
+			if sg, ok := outcome.result.(statusGetter); ok {
+				logger.Info("temporal dispatch did not start a new run",
+					"operation_id", route.Operation.OperationID,
+					"method", route.Method,
+					"path", route.Path,
+					"workflow_id", outcome.workflowID,
+					"status", sg.GetStatus(),
+				)
+			}
 		}
 
-		status := statusByAction[bindings[0].Action]
-		if status == 0 {
-			status = http.StatusOK
-		}
-		if len(results) == 1 {
-			writeJSON(w, status, results[0])
+		if len(items) == 1 {
+			writeJSON(w, statuses[0], items[0])
 			return
 		}
-		writeJSON(w, status, results)
+
+		switch {
+		case succeeded == len(items):
+			status := statusByAction[bindings[0].Action]
+			if status == 0 {
+				status = http.StatusOK
+			}
+			writeJSON(w, status, response.BatchResult{
+				Envelope: response.Envelope{
+					Status:  response.StatusWorkflowStarted,
+					Message: fmt.Sprintf("%d of %d workflow(s) started", succeeded, len(items)),
+				},
+				Results: items,
+			})
+		case succeeded == 0:
+			// Nothing started: a uniform outcome, however many different
+			// underlying reasons, so this isn't a "multi" status - report
+			// it as a single failure using the first item's HTTP status.
+			writeJSON(w, statuses[0], response.BatchResult{
+				Envelope: response.Envelope{
+					Status:  response.StatusWorkflowNotStarted,
+					Message: fmt.Sprintf("%d of %d workflow(s) started", succeeded, len(items)),
+				},
+				Results: items,
+			})
+		default:
+			// A genuine mix of outcomes: no single HTTP status code could
+			// describe it, hence Multi-Status.
+			writeJSON(w, http.StatusMultiStatus, response.BatchResult{
+				Envelope: response.Envelope{
+					Status:  response.StatusWorkflowPartiallyStarted,
+					Message: fmt.Sprintf("%d of %d workflow(s) started", succeeded, len(items)),
+				},
+				Results: items,
+			})
+		}
 	}
+}
+
+// workflowLabel names a binding for inclusion in a failure message, so a
+// batch response's per-item message identifies which workflow it's about,
+// e.g. "NotificationWorkflow (order-1234-notification): ...".
+func workflowLabel(binding spec.TemporalBinding, workflowID string) string {
+	name := binding.WorkflowType
+	if name == "" {
+		name = string(binding.Action)
+	}
+	return fmt.Sprintf("%s (%s)", name, workflowID)
 }
 
 // validateBody enforces the operation's requestBody.required flag and, when
 // an application/json schema is declared, validates body against it. The
-// returned Result.Success is true when there's nothing to report.
+// returned Result.Status.IsError() is false when there's nothing to report.
 func validateBody(rb *spec.RequestBody, body any) validate.Result {
 	if rb == nil {
-		return validate.Result{Envelope: response.Envelope{Success: true}}
+		return validate.Result{Envelope: response.Envelope{Status: response.StatusValid}}
 	}
 	if body == nil {
 		if rb.Required {
-			return validate.Result{Envelope: response.Envelope{Success: false, Message: "request body is required"}}
+			return validate.Result{Envelope: response.Envelope{Status: response.StatusInvalidRequest, Message: "request body is required"}}
 		}
-		return validate.Result{Envelope: response.Envelope{Success: true}}
+		return validate.Result{Envelope: response.Envelope{Status: response.StatusValid}}
 	}
 	media, ok := rb.Content["application/json"]
 	if !ok || len(media.Schema) == 0 {
-		return validate.Result{Envelope: response.Envelope{Success: true}}
+		return validate.Result{Envelope: response.Envelope{Status: response.StatusValid}}
 	}
 	return validate.Schema(media.Schema, body)
 }
@@ -247,29 +352,30 @@ func stringifyField(v any) string {
 	}
 }
 
-// errorResponse maps a Temporal service error to an HTTP status and message.
-func errorResponse(err error) (int, string) {
+// errorResponse maps a Temporal service error to a response.Status, an HTTP
+// status, and a message.
+func errorResponse(err error) (response.Status, int, string) {
 	var notFound *serviceerror.NotFound
 	if errors.As(err, &notFound) {
-		return http.StatusNotFound, err.Error()
+		return response.StatusNotFound, http.StatusNotFound, err.Error()
 	}
 
 	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 	if errors.As(err, &alreadyStarted) {
-		return http.StatusConflict, err.Error()
+		return response.StatusDuplicated, http.StatusConflict, err.Error()
 	}
 
 	var invalidArgument *serviceerror.InvalidArgument
 	if errors.As(err, &invalidArgument) {
-		return http.StatusBadRequest, err.Error()
+		return response.StatusInvalidArgument, http.StatusBadRequest, err.Error()
 	}
 
 	var permissionDenied *serviceerror.PermissionDenied
 	if errors.As(err, &permissionDenied) {
-		return http.StatusForbidden, err.Error()
+		return response.StatusForbidden, http.StatusForbidden, err.Error()
 	}
 
-	return http.StatusBadGateway, err.Error()
+	return response.StatusFailed, http.StatusBadGateway, err.Error()
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

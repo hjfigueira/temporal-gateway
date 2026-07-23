@@ -35,14 +35,21 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 		if err := d.client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
 			return nil, err
 		}
-		return map[string]string{"workflowId": workflowID, "signalName": binding.SignalName}, nil
+		return response.WorkflowSignaled{
+			Envelope:   response.Envelope{Status: response.StatusSignaled},
+			WorkflowID: workflowID,
+			SignalName: binding.SignalName,
+		}, nil
 	case spec.ActionQueryWorkflow:
 		return d.queryWorkflow(ctx, binding, workflowID, body)
 	case spec.ActionCancelWorkflow:
 		if err := d.client.CancelWorkflow(ctx, workflowID, ""); err != nil {
 			return nil, err
 		}
-		return map[string]string{"workflowId": workflowID, "status": "cancellation requested"}, nil
+		return response.WorkflowAck{
+			Envelope:   response.Envelope{Status: response.StatusCancelled},
+			WorkflowID: workflowID,
+		}, nil
 	case spec.ActionTerminateWorkflow:
 		reason, _ := body.(string)
 		if m, ok := body.(map[string]any); ok {
@@ -53,7 +60,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 		if err := d.client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
 			return nil, err
 		}
-		return map[string]string{"workflowId": workflowID, "status": "terminated"}, nil
+		return response.WorkflowAck{
+			Envelope:   response.Envelope{Status: response.StatusTerminated},
+			WorkflowID: workflowID,
+		}, nil
 	case spec.ActionGetResult:
 		return d.getResult(ctx, workflowID)
 	default:
@@ -73,16 +83,18 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, binding spec.TemporalBin
 		WorkflowExecutionErrorWhenAlreadyStarted: binding.WorkflowExecutionErrorWhenAlreadyStarted,
 		CronSchedule:                             binding.CronSchedule,
 		Memo:                                     binding.Memo,
-		SearchAttributes:                         binding.SearchAttributes,
 		EnableEagerStart:                         binding.EnableEagerStart,
 		StaticSummary:                            binding.StaticSummary,
 		StaticDetails:                            binding.StaticDetails,
 	}
-	if policy, ok := parseIDReusePolicy(binding.IDReusePolicy); ok {
-		options.WorkflowIDReusePolicy = policy
-	}
-	if policy, ok := parseIDConflictPolicy(binding.WorkflowIDConflictPolicy); ok {
-		options.WorkflowIDConflictPolicy = policy
+	options.WorkflowIDReusePolicy, options.WorkflowIDConflictPolicy =
+		resolveReuseAndConflictPolicy(binding.IDReusePolicy, binding.WorkflowIDConflictPolicy)
+	if len(binding.SearchAttributes) > 0 {
+		attrs, err := buildTypedSearchAttributes(binding.SearchAttributes)
+		if err != nil {
+			return nil, fmt.Errorf("x-temporal searchAttributes: %w", err)
+		}
+		options.TypedSearchAttributes = attrs
 	}
 	if dur, ok := parseDuration(binding.WorkflowExecutionTimeout); ok {
 		options.WorkflowExecutionTimeout = dur
@@ -120,16 +132,180 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, binding spec.TemporalBin
 		args = append(args, body)
 	}
 
+	// ExecuteWorkflow can succeed (no error) without creating a new run: if
+	// a workflow with this ID already exists, WorkflowIDConflictPolicy or
+	// WorkflowIDReusePolicy may allow the call to silently attach to that
+	// existing execution and return its RunID instead of erroring - see
+	// client.StartWorkflowOptions.WorkflowExecutionErrorWhenAlreadyStarted.
+	// Capture any such execution's identity and status before starting, so
+	// we can tell the two cases apart by comparing RunIDs afterwards -
+	// comparing timestamps instead would be unreliable, since ordinary
+	// request latency can easily exceed the gap between two calls.
+	var priorRunID string
+	var priorStatus enumspb.WorkflowExecutionStatus
+	if desc, descErr := d.client.DescribeWorkflowExecution(ctx, workflowID, ""); descErr == nil {
+		if info := desc.GetWorkflowExecutionInfo(); info != nil {
+			priorRunID = info.GetExecution().GetRunId()
+			priorStatus = info.GetStatus()
+		}
+	}
+	// If the describe call errors (most commonly NotFound, meaning no
+	// workflow with this ID exists yet), priorRunID stays empty, which
+	// below is correctly read as "nothing to attach to".
+
 	run, err := d.client.ExecuteWorkflow(ctx, options, binding.WorkflowType, args...)
 	if err != nil {
 		return nil, err
 	}
 
+	status, message := response.StatusStarted, ""
+	if priorRunID != "" && run.GetRunID() == priorRunID {
+		status, message = classifyExistingRun(priorStatus)
+	}
+
 	return response.WorkflowStarted{
-		Envelope:   response.Envelope{Success: true, Message: "workflow started"},
+		Envelope:   response.Envelope{Status: status, Message: message},
 		WorkflowID: run.GetID(),
 		RunID:      run.GetRunID(),
 	}, nil
+}
+
+// classifyExistingRun maps a pre-existing workflow's current execution
+// status to the response.Status/message describing it, used when
+// ExecuteWorkflow attaches to an existing run instead of starting a new
+// one.
+func classifyExistingRun(status enumspb.WorkflowExecutionStatus) (response.Status, string) {
+	switch status {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, enumspb.WORKFLOW_EXECUTION_STATUS_CONTINUED_AS_NEW:
+		return response.StatusWorkflowRunning, "a workflow with this ID is already running"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_COMPLETED:
+		return response.StatusWorkflowCompleted, "a workflow with this ID already completed"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_FAILED:
+		return response.StatusWorkflowFailed, "a workflow with this ID already failed"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_CANCELED:
+		return response.StatusWorkflowCancelled, "a workflow with this ID was already cancelled"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED:
+		return response.StatusWorkflowTerminated, "a workflow with this ID was already terminated"
+	case enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT:
+		return response.StatusWorkflowTimedOut, "a workflow with this ID already timed out"
+	default:
+		return response.StatusWorkflowRunning, "a workflow with this ID already exists"
+	}
+}
+
+// buildTypedSearchAttributes converts x-temporal's YAML-friendly
+// {name, type, value} search attribute list into the SDK's typed
+// search attribute collection. client.StartWorkflowOptions.SearchAttributes
+// (a plain map[string]interface{}) is deprecated in favor of
+// TypedSearchAttributes, which requires each attribute to be built through
+// an explicitly typed key (SearchAttributeKeyString, SearchAttributeKeyBool,
+// ...) - hence needing to know each attribute's declared Type here.
+// spec.validate already checked every attribute's Value matches its Type,
+// so a conversion error here indicates a bug in that validation rather than
+// bad input.
+func buildTypedSearchAttributes(attrs []spec.SearchAttribute) (sdktemporal.SearchAttributes, error) {
+	updates := make([]sdktemporal.SearchAttributeUpdate, 0, len(attrs))
+	for _, sa := range attrs {
+		update, err := searchAttributeUpdate(sa)
+		if err != nil {
+			return sdktemporal.SearchAttributes{}, fmt.Errorf("%q: %w", sa.Name, err)
+		}
+		updates = append(updates, update)
+	}
+	return sdktemporal.NewSearchAttributes(updates...), nil
+}
+
+// searchAttributeUpdate builds the SDK update for a single search
+// attribute, dispatching on its declared Type.
+func searchAttributeUpdate(sa spec.SearchAttribute) (sdktemporal.SearchAttributeUpdate, error) {
+	switch sa.Type {
+	case "string":
+		v, ok := sa.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("value must be a string")
+		}
+		return sdktemporal.NewSearchAttributeKeyString(sa.Name).ValueSet(v), nil
+	case "keyword":
+		v, ok := sa.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("value must be a string")
+		}
+		return sdktemporal.NewSearchAttributeKeyKeyword(sa.Name).ValueSet(v), nil
+	case "bool":
+		v, ok := sa.Value.(bool)
+		if !ok {
+			return nil, fmt.Errorf("value must be a boolean")
+		}
+		return sdktemporal.NewSearchAttributeKeyBool(sa.Name).ValueSet(v), nil
+	case "int":
+		v, ok := toInt64(sa.Value)
+		if !ok {
+			return nil, fmt.Errorf("value must be an integer")
+		}
+		return sdktemporal.NewSearchAttributeKeyInt64(sa.Name).ValueSet(v), nil
+	case "float":
+		v, ok := toFloat64(sa.Value)
+		if !ok {
+			return nil, fmt.Errorf("value must be a number")
+		}
+		return sdktemporal.NewSearchAttributeKeyFloat64(sa.Name).ValueSet(v), nil
+	case "time":
+		s, ok := sa.Value.(string)
+		if !ok {
+			return nil, fmt.Errorf("value must be an RFC3339 string")
+		}
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return nil, fmt.Errorf("value %q is not a valid RFC3339 timestamp: %w", s, err)
+		}
+		return sdktemporal.NewSearchAttributeKeyTime(sa.Name).ValueSet(t), nil
+	case "keywordList":
+		list, ok := sa.Value.([]any)
+		if !ok {
+			return nil, fmt.Errorf("value must be a list of strings")
+		}
+		values := make([]string, len(list))
+		for i, v := range list {
+			s, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("value must be a list of strings")
+			}
+			values[i] = s
+		}
+		return sdktemporal.NewSearchAttributeKeyKeywordList(sa.Name).ValueSet(values), nil
+	default:
+		return nil, fmt.Errorf("unknown type %q", sa.Type)
+	}
+}
+
+// toInt64 coerces a YAML-decoded numeric value (gopkg.in/yaml.v3 decodes
+// plain integers as int) into an int64.
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	}
+	return 0, false
+}
+
+// toFloat64 coerces a YAML-decoded numeric value into a float64.
+// gopkg.in/yaml.v3 decodes a whole number written without a decimal point
+// as int even when the schema calls for a float, so int/int64 must be
+// accepted too.
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	}
+	return 0, false
 }
 
 func (d *Dispatcher) queryWorkflow(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
@@ -160,8 +336,28 @@ func (d *Dispatcher) getResult(ctx context.Context, workflowID string) (any, err
 	return result, nil
 }
 
+// resolveReuseAndConflictPolicy resolves an x-temporal binding's
+// idReusePolicy and workflowIdConflictPolicy into the SDK enums to send to
+// Temporal. "TerminateIfRunning" is translated into
+// AllowDuplicate+TerminateExisting, the non-deprecated combination the
+// Temporal API docs recommend in place of the deprecated
+// WORKFLOW_ID_REUSE_POLICY_TERMINATE_IF_RUNNING value; spec.validate
+// rejects combining "TerminateIfRunning" with an explicit
+// workflowIdConflictPolicy, so it's safe to set both here unconditionally.
+func resolveReuseAndConflictPolicy(idReusePolicy, workflowIDConflictPolicy string) (enumspb.WorkflowIdReusePolicy, enumspb.WorkflowIdConflictPolicy) {
+	if idReusePolicy == "TerminateIfRunning" {
+		return enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE, enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING
+	}
+
+	reuse, _ := parseIDReusePolicy(idReusePolicy)
+	conflict, _ := parseIDConflictPolicy(workflowIDConflictPolicy)
+	return reuse, conflict
+}
+
 // parseIDReusePolicy maps the human-readable policy names used in
-// x-temporal.idReusePolicy to the SDK enum.
+// x-temporal.idReusePolicy to the SDK enum. "TerminateIfRunning" is handled
+// separately by resolveReuseAndConflictPolicy, so it's deliberately not
+// mapped here.
 func parseIDReusePolicy(name string) (enumspb.WorkflowIdReusePolicy, bool) {
 	switch name {
 	case "":
@@ -172,8 +368,6 @@ func parseIDReusePolicy(name string) (enumspb.WorkflowIdReusePolicy, bool) {
 		return enumspb.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY, true
 	case "RejectDuplicate":
 		return enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE, true
-	case "TerminateIfRunning":
-		return enumspb.WORKFLOW_ID_REUSE_POLICY_TERMINATE_IF_RUNNING, true
 	default:
 		return enumspb.WORKFLOW_ID_REUSE_POLICY_UNSPECIFIED, false
 	}

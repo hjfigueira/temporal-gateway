@@ -3,6 +3,8 @@ package validate
 import (
 	"encoding/json"
 	"testing"
+
+	"temporal-gateway/internal/response"
 )
 
 // decode parses a JSON literal the way the gateway does, so numbers come
@@ -33,8 +35,11 @@ func TestSchemaOrderPayload(t *testing.T) {
 	t.Run("valid payload passes", func(t *testing.T) {
 		data := decode(t, `{"orderId":"o1","customerId":"c1","items":["a","b"]}`)
 		result := Schema(schema, data)
-		if !result.Success {
+		if result.Status.IsError() {
 			t.Fatalf("expected success, got %+v", result)
+		}
+		if result.Status != response.StatusValid {
+			t.Errorf("Status = %q, want %q", result.Status, response.StatusValid)
 		}
 		if result.Fields != nil {
 			t.Errorf("expected no fields on success, got %+v", result.Fields)
@@ -44,8 +49,11 @@ func TestSchemaOrderPayload(t *testing.T) {
 	t.Run("missing required field fails", func(t *testing.T) {
 		data := decode(t, `{"customerId":"c1"}`)
 		result := Schema(schema, data)
-		if result.Success {
+		if !result.Status.IsError() {
 			t.Fatal("expected failure for missing orderId")
+		}
+		if result.Status != response.StatusValidationFailed {
+			t.Errorf("Status = %q, want %q", result.Status, response.StatusValidationFailed)
 		}
 		if result.Message == "" {
 			t.Error("expected a human-readable message")
@@ -60,7 +68,7 @@ func TestSchemaOrderPayload(t *testing.T) {
 	t.Run("wrong property type fails", func(t *testing.T) {
 		data := decode(t, `{"orderId":123,"customerId":"c1"}`)
 		result := Schema(schema, data)
-		if result.Success {
+		if !result.Status.IsError() {
 			t.Fatal("expected failure for orderId with wrong type")
 		}
 		if _, ok := result.Fields["orderId"]; !ok {
@@ -71,7 +79,7 @@ func TestSchemaOrderPayload(t *testing.T) {
 	t.Run("wrong array item type fails under an indexed field path", func(t *testing.T) {
 		data := decode(t, `{"orderId":"o1","customerId":"c1","items":["a",2]}`)
 		result := Schema(schema, data)
-		if result.Success {
+		if !result.Status.IsError() {
 			t.Fatal("expected failure for a non-string item")
 		}
 		if _, ok := result.Fields["items[1]"]; !ok {
@@ -82,7 +90,7 @@ func TestSchemaOrderPayload(t *testing.T) {
 	t.Run("top-level type mismatch fails under the root field", func(t *testing.T) {
 		data := decode(t, `["not","an","object"]`)
 		result := Schema(schema, data)
-		if result.Success {
+		if !result.Status.IsError() {
 			t.Fatal("expected failure for an array where an object is required")
 		}
 		if _, ok := result.Fields[rootField]; !ok {
@@ -95,7 +103,7 @@ func TestSchemaOrderPayload(t *testing.T) {
 		// unrelated fields should both surface, not just the first found.
 		data := decode(t, `{"customerId":123}`)
 		result := Schema(schema, data)
-		if result.Success {
+		if !result.Status.IsError() {
 			t.Fatal("expected failure")
 		}
 		if _, ok := result.Fields["orderId"]; !ok {
@@ -201,7 +209,7 @@ func TestMessagesFollowLaravelWording(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := Schema(tt.schema, tt.data)
-			if result.Success {
+			if !result.Status.IsError() {
 				t.Fatal("expected failure")
 			}
 			rules, ok := result.Fields[tt.field]
@@ -226,7 +234,7 @@ func TestSchemaAccumulatesMultipleRulesOnSameField(t *testing.T) {
 	data := decode(t, `{"code":"ab"}`)
 
 	result := Schema(schema, data)
-	if result.Success {
+	if !result.Status.IsError() {
 		t.Fatal("expected failure")
 	}
 
@@ -333,8 +341,8 @@ func TestSchemaConstraints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := Schema(tt.schema, tt.data)
-			if result.Success == tt.wantErr {
-				t.Errorf("Schema() success = %v, wantErr %v (result: %+v)", result.Success, tt.wantErr, result)
+			if result.Status.IsError() != tt.wantErr {
+				t.Errorf("Schema() IsError() = %v, wantErr %v (result: %+v)", result.Status.IsError(), tt.wantErr, result)
 			}
 		})
 	}
