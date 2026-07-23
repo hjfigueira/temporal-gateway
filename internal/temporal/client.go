@@ -1,7 +1,8 @@
 // Package temporal wires the gateway to a real Temporal cluster: dialing a
-// client, validating the API spec against the configured workflow catalog,
-// and dispatching each x-temporal action (start/signal/query/etc a
-// workflow) against it.
+// client and dispatching each x-temporal action (startWorkflow,
+// signalWorkflow, queryWorkflow, cancelWorkflow, terminateWorkflow,
+// getResult) against it. Catalog supplies a workflow type's default task
+// queue for bindings that don't set their own.
 package temporal
 
 import (

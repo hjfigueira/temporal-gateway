@@ -3,17 +3,26 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"temporal-gateway/internal/config"
 	"temporal-gateway/internal/gateway"
 	"temporal-gateway/internal/spec"
 	"temporal-gateway/internal/temporal"
 )
+
+// shutdownTimeout bounds how long the server waits for in-flight requests to
+// finish once a shutdown signal is received.
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -89,8 +98,33 @@ func main() {
 	handler := gateway.NewHandler(apiSpec, dispatcher, logger)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
+	server := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+		// ReadHeaderTimeout bounds how long a client may take sending
+		// request headers, so a slow/stalled client can't tie up a
+		// connection indefinitely (a "slowloris" resource-exhaustion risk
+		// with the net/http default of no timeout).
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	// Shut down on SIGINT/SIGTERM by draining in-flight requests instead of
+	// dropping them, and closing the Temporal connection cleanly - without
+	// this, the OS kills the process directly and none of that happens.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		logger.Info("shutting down", "timeout", shutdownTimeout.String())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			logger.Error("graceful shutdown failed", "error", err)
+		}
+	}()
+
 	logger.Info("starting http server", "addr", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("http server stopped", "error", err)
 		temporalClient.Close()
 		os.Exit(1)

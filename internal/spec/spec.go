@@ -8,12 +8,8 @@
 package spec
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -108,6 +104,10 @@ type Priority struct {
 	FairnessWeight float32 `yaml:"fairnessWeight,omitempty"`
 }
 
+// Parameter is an OpenAPI parameter declaration (path, query, or header).
+// The gateway only reads Name/In itself (see PathParamNames); Required and
+// Schema are carried through for documentation purposes only and are not
+// currently enforced.
 type Parameter struct {
 	Name     string         `yaml:"name"`
 	In       string         `yaml:"in"`
@@ -115,15 +115,24 @@ type Parameter struct {
 	Schema   map[string]any `yaml:"schema,omitempty"`
 }
 
+// MediaType holds the JSON Schema for one content type of a RequestBody.
+// Only the "application/json" entry is read by the gateway (see
+// internal/gateway's validateBody).
 type MediaType struct {
 	Schema map[string]any `yaml:"schema,omitempty"`
 }
 
+// RequestBody is an OpenAPI requestBody declaration: Required governs
+// whether a missing body is rejected, and each Content entry's Schema is
+// validated against the decoded body (see internal/validate.Schema).
 type RequestBody struct {
 	Required bool                 `yaml:"required,omitempty"`
 	Content  map[string]MediaType `yaml:"content,omitempty"`
 }
 
+// Operation is one HTTP method entry under a path (OpenAPI's operation
+// object), extended with the "x-temporal" list describing what it does
+// against Temporal.
 type Operation struct {
 	OperationID string            `yaml:"operationId"`
 	Summary     string            `yaml:"summary,omitempty"`
@@ -133,6 +142,9 @@ type Operation struct {
 	Temporal    []TemporalBinding `yaml:"x-temporal"`
 }
 
+// PathItem is the set of HTTP methods declared for one path (OpenAPI's path
+// item object). Only the methods the gateway actually routes are modeled;
+// OPTIONS/HEAD/TRACE are not supported.
 type PathItem struct {
 	Get    *Operation `yaml:"get,omitempty"`
 	Post   *Operation `yaml:"post,omitempty"`
@@ -141,6 +153,7 @@ type PathItem struct {
 	Delete *Operation `yaml:"delete,omitempty"`
 }
 
+// Info is the OpenAPI document's info object.
 type Info struct {
 	Title       string `yaml:"title"`
 	Version     string `yaml:"version"`
@@ -154,7 +167,11 @@ type Spec struct {
 	Paths   map[string]PathItem `yaml:"paths"`
 }
 
-// Load reads and parses a Spec from path.
+// Load reads path, expands "${VAR}"/"${VAR:-default}" environment
+// references, parses it as the Spec YAML document, and validates every
+// operation's x-temporal bindings (see validate.go) before returning it -
+// so a misconfigured spec fails at startup rather than on the first
+// request that hits the bad route.
 func Load(path string) (*Spec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -176,253 +193,4 @@ func Load(path string) (*Spec, error) {
 	}
 
 	return &s, nil
-}
-
-// validIDReusePolicies mirrors the WorkflowIDReusePolicy values the
-// dispatcher understands (see internal/temporal.parseIDReusePolicy). Kept
-// here, rather than importing the Temporal SDK, so the spec package stays
-// free of transport-specific dependencies.
-var validIDReusePolicies = map[string]bool{
-	"":                         true,
-	"AllowDuplicate":           true,
-	"AllowDuplicateFailedOnly": true,
-	"RejectDuplicate":          true,
-	"TerminateIfRunning":       true,
-}
-
-// validIDConflictPolicies mirrors the WorkflowIDConflictPolicy values the
-// dispatcher understands (see internal/temporal.parseIDConflictPolicy).
-var validIDConflictPolicies = map[string]bool{
-	"":                  true,
-	"Fail":              true,
-	"UseExisting":       true,
-	"TerminateExisting": true,
-}
-
-// validSearchAttributeTypes mirrors the SearchAttribute.Type values the
-// dispatcher understands (see internal/temporal.searchAttributeUpdate),
-// each corresponding to one of the SDK's typed search attribute key
-// constructors.
-var validSearchAttributeTypes = map[string]bool{
-	"string":      true,
-	"keyword":     true,
-	"bool":        true,
-	"int":         true,
-	"float":       true,
-	"time":        true,
-	"keywordList": true,
-}
-
-// validateSearchAttributeValue checks that sa.Value's shape matches its
-// declared Type, so a mismatch is caught at spec-load time rather than
-// surfacing as a dispatch-time error on the first request. Assumes
-// validSearchAttributeTypes[sa.Type] is already true.
-func validateSearchAttributeValue(sa SearchAttribute) error {
-	switch sa.Type {
-	case "string", "keyword":
-		if _, ok := sa.Value.(string); !ok {
-			return fmt.Errorf("value must be a string for type %q", sa.Type)
-		}
-	case "bool":
-		if _, ok := sa.Value.(bool); !ok {
-			return fmt.Errorf("value must be a boolean for type %q", sa.Type)
-		}
-	case "int":
-		switch sa.Value.(type) {
-		case int, int64:
-		default:
-			return fmt.Errorf("value must be an integer for type %q", sa.Type)
-		}
-	case "float":
-		switch sa.Value.(type) {
-		case float64, float32, int, int64:
-		default:
-			return fmt.Errorf("value must be a number for type %q", sa.Type)
-		}
-	case "time":
-		s, ok := sa.Value.(string)
-		if !ok {
-			return fmt.Errorf("value must be an RFC3339 string for type %q", sa.Type)
-		}
-		if _, err := time.Parse(time.RFC3339, s); err != nil {
-			return fmt.Errorf("value %q is not a valid RFC3339 timestamp: %w", s, err)
-		}
-	case "keywordList":
-		list, ok := sa.Value.([]any)
-		if !ok {
-			return fmt.Errorf("value must be a list of strings for type %q", sa.Type)
-		}
-		for _, v := range list {
-			if _, ok := v.(string); !ok {
-				return fmt.Errorf("value must be a list of strings for type %q", sa.Type)
-			}
-		}
-	}
-	return nil
-}
-
-// validate checks every operation's x-temporal bindings and returns a
-// single error joining every problem found (via errors.Error(), one per
-// line), rather than stopping at the first, so a misconfigured spec can be
-// fixed in one pass instead of being rediscovered error-by-error.
-func (s *Spec) validate() error {
-	var errs []error
-	for path, item := range s.Paths {
-		for method, op := range item.operations() {
-			if len(op.Temporal) == 0 {
-				errs = append(errs, fmt.Errorf("%s %s: missing x-temporal", method, path))
-				continue
-			}
-			for i, t := range op.Temporal {
-				errs = append(errs, validateBinding(method, path, i, t)...)
-			}
-		}
-	}
-	return errors.Join(errs...)
-}
-
-func validateBinding(method, path string, i int, t TemporalBinding) []error {
-	var errs []error
-
-	if t.Action == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing action", method, path, i))
-	}
-
-	switch t.Action {
-	case ActionStartWorkflow:
-		if t.WorkflowType == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: startWorkflow requires workflowType", method, path, i))
-		}
-		if t.TaskQueue == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: startWorkflow requires taskQueue", method, path, i))
-		}
-		if !validIDReusePolicies[t.IDReusePolicy] {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown idReusePolicy %q", method, path, i, t.IDReusePolicy))
-		}
-		if !validIDConflictPolicies[t.WorkflowIDConflictPolicy] {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown workflowIdConflictPolicy %q", method, path, i, t.WorkflowIDConflictPolicy))
-		}
-		if t.IDReusePolicy == "TerminateIfRunning" && t.WorkflowIDConflictPolicy != "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: idReusePolicy TerminateIfRunning cannot be combined with workflowIdConflictPolicy (TerminateIfRunning already implies TerminateExisting)", method, path, i))
-		}
-		if t.CronSchedule != "" && t.StartDelay != "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: cronSchedule and startDelay cannot both be set", method, path, i))
-		}
-		durations := []struct{ name, value string }{
-			{"workflowExecutionTimeout", t.WorkflowExecutionTimeout},
-			{"workflowRunTimeout", t.WorkflowRunTimeout},
-			{"workflowTaskTimeout", t.WorkflowTaskTimeout},
-			{"startDelay", t.StartDelay},
-		}
-		if t.RetryPolicy != nil {
-			durations = append(durations,
-				struct{ name, value string }{"retryPolicy.initialInterval", t.RetryPolicy.InitialInterval},
-				struct{ name, value string }{"retryPolicy.maximumInterval", t.RetryPolicy.MaximumInterval},
-			)
-		}
-		for _, d := range durations {
-			if d.value == "" {
-				continue
-			}
-			if _, err := time.ParseDuration(d.value); err != nil {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: invalid %s %q: %w", method, path, i, d.name, d.value, err))
-			}
-		}
-		for j, sa := range t.SearchAttributes {
-			if sa.Name == "" {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: missing name", method, path, i, j))
-			}
-			if !validSearchAttributeTypes[sa.Type] {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: unknown type %q", method, path, i, j, sa.Type))
-				continue
-			}
-			if err := validateSearchAttributeValue(sa); err != nil {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d] %q: %w", method, path, i, j, sa.Name, err))
-			}
-		}
-	case ActionSignalWorkflow:
-		if t.SignalName == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: signalWorkflow requires signalName", method, path, i))
-		}
-	case ActionQueryWorkflow:
-		if t.QueryType == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: queryWorkflow requires queryType", method, path, i))
-		}
-	case ActionCancelWorkflow, ActionTerminateWorkflow, ActionGetResult:
-		// no action-specific required fields beyond workflowId.
-	case "":
-		// already reported above as "missing action".
-	default:
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown action %q", method, path, i, t.Action))
-	}
-
-	if t.WorkflowID == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing workflowId", method, path, i))
-	}
-
-	return errs
-}
-
-// Route is a flattened (method, path, operation) triple, convenient for
-// iterating over the spec when registering HTTP handlers.
-type Route struct {
-	Method    string
-	Path      string
-	Operation *Operation
-}
-
-// Routes flattens the spec's paths into a stable, sorted list of routes.
-func (s *Spec) Routes() []Route {
-	routes := make([]Route, 0, len(s.Paths))
-	for path, item := range s.Paths {
-		for method, op := range item.operations() {
-			routes = append(routes, Route{Method: method, Path: path, Operation: op})
-		}
-	}
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].Path != routes[j].Path {
-			return routes[i].Path < routes[j].Path
-		}
-		return routes[i].Method < routes[j].Method
-	})
-	return routes
-}
-
-func (p PathItem) operations() map[string]*Operation {
-	ops := map[string]*Operation{}
-	if p.Get != nil {
-		ops["GET"] = p.Get
-	}
-	if p.Post != nil {
-		ops["POST"] = p.Post
-	}
-	if p.Put != nil {
-		ops["PUT"] = p.Put
-	}
-	if p.Patch != nil {
-		ops["PATCH"] = p.Patch
-	}
-	if p.Delete != nil {
-		ops["DELETE"] = p.Delete
-	}
-	return ops
-}
-
-// PathParamNames returns the {curly-brace} placeholder names declared in a
-// path template, e.g. "/orders/{orderId}" -> ["orderId"].
-func PathParamNames(path string) []string {
-	var names []string
-	for {
-		start := strings.IndexByte(path, '{')
-		if start == -1 {
-			break
-		}
-		end := strings.IndexByte(path[start:], '}')
-		if end == -1 {
-			break
-		}
-		names = append(names, path[start+1:start+end])
-		path = path[start+end+1:]
-	}
-	return names
 }

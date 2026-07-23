@@ -56,8 +56,10 @@ type JWTAuthConfig struct {
 	JWKSURL  string `yaml:"jwksUrl"`
 }
 
-// AuthConfig configures how incoming requests are authenticated. Type
-// selects which of the nested configs applies: "none", "apiKey", or "jwt".
+// AuthConfig configures how incoming requests are authenticated: Type
+// selects which of the nested configs applies ("none", "apiKey", or "jwt").
+// It is currently only parsed and logged at startup - the gateway does not
+// yet enforce it against incoming requests.
 type AuthConfig struct {
 	Type   string            `yaml:"type"`
 	APIKey *APIKeyAuthConfig `yaml:"apiKey,omitempty"`
@@ -65,8 +67,10 @@ type AuthConfig struct {
 }
 
 // MiddlewareConfig enables and configures a named middleware (e.g. logging,
-// cors, rateLimit). Config is free-form so each middleware can define its
-// own options without changing this struct.
+// cors, rateLimit); Config is free-form so each middleware can define its
+// own options without changing this struct. It is currently only parsed and
+// logged at startup - the gateway does not yet apply any middleware to the
+// request pipeline.
 type MiddlewareConfig struct {
 	Name    string         `yaml:"name"`
 	Enabled bool           `yaml:"enabled"`
