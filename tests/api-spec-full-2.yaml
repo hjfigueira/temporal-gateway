@@ -1,0 +1,941 @@
+openapi: 3.0.3
+info:
+  title: OpenAPI 3.0.3 Full-Coverage Validation Spec
+  version: "1.0.0"
+  description: >
+    Not a real API. Every endpoint here is a targeted test fixture for an
+    OpenAPI 3.0.3 parser: parameter locations & styles, schema types,
+    formats, constraints, composition keywords, request/response content
+    types, security schemes, and structural edge cases. See the inline
+    comment above each path for what it validates.
+  termsOfService: "https://example.com/terms"
+  contact:
+    name: API Test Fixtures
+    url: "https://example.com/contact"
+    email: fixtures@example.com
+  license:
+    name: Apache 2.0
+    url: "https://www.apache.org/licenses/LICENSE-2.0.html"
+externalDocs:
+  description: Full parser test suite docs
+  url: "https://example.com/docs"
+
+servers:
+  - url: "https://{environment}.api.example.com/v{majorVersion}"
+    description: Templated server URL with variables.
+    variables:
+      environment:
+        default: sandbox
+        enum: [sandbox, staging, production]
+      majorVersion:
+        default: "1"
+  - url: "https://api.example.com/v1"
+    description: Fixed server URL, no variables.
+
+tags:
+  - name: parameters
+    description: Endpoints that exercise parameter locations/styles.
+  - name: schemas
+    description: Endpoints that exercise schema types/formats/constraints.
+  - name: content-types
+    description: Endpoints that exercise request/response media types.
+  - name: security
+    description: Endpoints that exercise security schemes.
+  - name: structural
+    description: Endpoints that exercise structural/meta features.
+
+security:
+  - {}
+  - apiKeyAuth: []
+
+paths:
+  # ======================================================================
+  # PARAMETER LOCATIONS & STYLES
+  # ======================================================================
+
+  # path params: simple style (default), simple+explode, label style, matrix style
+  /params/path/{simpleParam}/{explodeArrayParam}/{labelParam}/{matrixParam}:
+    get:
+      operationId: pathParamStyles
+      tags: [parameters]
+      summary: Exercises every path-parameter style.
+      parameters:
+        - name: simpleParam
+          in: path
+          required: true
+          style: simple
+          explode: false
+          schema:
+            type: string
+        - name: explodeArrayParam
+          in: path
+          required: true
+          style: simple
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+        - name: labelParam
+          in: path
+          required: true
+          style: label
+          explode: true
+          schema:
+            type: object
+            properties:
+              a: { type: string }
+              b: { type: integer }
+        - name: matrixParam
+          in: path
+          required: true
+          style: matrix
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+      responses:
+        "200":
+          description: OK
+
+  # query params: form (default), form+explode=false (CSV), spaceDelimited,
+  # pipeDelimited, deepObject, allowReserved, allowEmptyValue, content-based
+  /params/query:
+    get:
+      operationId: queryParamStyles
+      tags: [parameters]
+      summary: Exercises every query-parameter style and edge case.
+      parameters:
+        - name: csvIds
+          in: query
+          description: form style, explode=false -> comma-separated
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: multiIds
+          in: query
+          description: form style, explode=true (default) -> repeated params
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: integer
+        - name: ssvTags
+          in: query
+          description: spaceDelimited, explode=false
+          style: spaceDelimited
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: psvTags
+          in: query
+          description: pipeDelimited, explode=false
+          style: pipeDelimited
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: filter
+          in: query
+          description: deepObject style for structured filtering, e.g. filter[status]=open
+          style: deepObject
+          explode: true
+          schema:
+            type: object
+            properties:
+              status: { type: string }
+              minPrice: { type: number }
+        - name: rawUrl
+          in: query
+          description: allowReserved lets reserved chars pass unescaped
+          allowReserved: true
+          schema:
+            type: string
+        - name: flagPresence
+          in: query
+          description: allowEmptyValue permits ?flagPresence= with no value
+          allowEmptyValue: true
+          schema:
+            type: boolean
+        - name: structuredJson
+          in: query
+          description: content-based parameter instead of schema/style
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  page: { type: integer }
+                  size: { type: integer }
+        - name: deprecatedParam
+          in: query
+          deprecated: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+
+  # header params + cookie params
+  /params/header-and-cookie:
+    get:
+      operationId: headerAndCookieParams
+      tags: [parameters]
+      summary: Exercises header and cookie parameter locations.
+      parameters:
+        - name: X-Trace-Id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: X-Csv-Header
+          in: header
+          style: simple
+          explode: false
+          schema:
+            type: array
+            items:
+              type: string
+        - name: session_id
+          in: cookie
+          required: true
+          style: form
+          explode: false
+          schema:
+            type: string
+        - name: prefs
+          in: cookie
+          style: form
+          explode: true
+          schema:
+            type: object
+            properties:
+              theme: { type: string }
+              lang: { type: string }
+      responses:
+        "200":
+          description: OK
+
+  # ======================================================================
+  # SCHEMA TYPES, FORMATS, CONSTRAINTS
+  # ======================================================================
+
+  /schemas/primitives:
+    post:
+      operationId: primitiveTypesAndFormats
+      tags: [schemas]
+      summary: Every primitive type with every relevant format and constraint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrimitiveShowcase"
+      responses:
+        "200":
+          description: OK
+
+  /schemas/composition:
+    post:
+      operationId: compositionKeywords
+      tags: [schemas]
+      summary: allOf / oneOf / anyOf / not / discriminator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentMethod"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SuccessResult"
+                  - $ref: "#/components/schemas/ErrorResult"
+
+  /schemas/collections-and-objects:
+    post:
+      operationId: collectionsAndObjects
+      tags: [schemas]
+      summary: >
+        Nested objects, arrays of objects, arrays of arrays, free-form
+        objects, typed maps (additionalProperties as schema), and
+        min/max*Properties/Items constraints.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [matrix, tags]
+              properties:
+                nestedObject:
+                  type: object
+                  properties:
+                    level1:
+                      type: object
+                      properties:
+                        level2:
+                          type: object
+                          properties:
+                            value:
+                              type: string
+                arrayOfObjects:
+                  type: array
+                  items:
+                    type: object
+                    required: [id]
+                    properties:
+                      id: { type: string, format: uuid }
+                      label: { type: string }
+                matrix:
+                  type: array
+                  minItems: 1
+                  maxItems: 10
+                  items:
+                    type: array
+                    items:
+                      type: number
+                freeForm:
+                  type: object
+                  additionalProperties: true
+                typedMap:
+                  type: object
+                  description: string -> integer map
+                  additionalProperties:
+                    type: integer
+                closedObject:
+                  type: object
+                  additionalProperties: false
+                  properties:
+                    onlyThisField: { type: string }
+                tags:
+                  type: array
+                  uniqueItems: true
+                  minItems: 1
+                  items:
+                    type: string
+                boundedProps:
+                  type: object
+                  minProperties: 1
+                  maxProperties: 5
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: OK
+
+  /schemas/references-and-nullability:
+    get:
+      operationId: referencesAndNullability
+      tags: [schemas]
+      summary: $ref reuse, nullable, readOnly/writeOnly, default, deprecated field.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+                  nullableField:
+                    type: string
+                    nullable: true
+                  legacyField:
+                    type: string
+                    deprecated: true
+                  statusWithDefault:
+                    type: string
+                    enum: [active, inactive, pending]
+                    default: pending
+
+  # ======================================================================
+  # REQUEST/RESPONSE CONTENT TYPES
+  # ======================================================================
+
+  /content/multi-format:
+    post:
+      operationId: multiFormatBody
+      tags: [content-types]
+      summary: Same operation accepting multiple request content types.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/User"
+          application/xml:
+            schema:
+              $ref: "#/components/schemas/User"
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+          text/plain:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: OK
+
+  /content/file-upload:
+    post:
+      operationId: multipartFileUpload
+      tags: [content-types]
+      summary: multipart/form-data with binary file + metadata fields.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                description:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+            encoding:
+              file:
+                contentType: application/octet-stream
+              tags:
+                style: form
+                explode: true
+      responses:
+        "201":
+          description: Uploaded.
+
+  /content/raw-binary:
+    put:
+      operationId: rawBinaryUpload
+      tags: [content-types]
+      summary: application/octet-stream raw body.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "204":
+          description: No content.
+
+  /content/multi-response:
+    get:
+      operationId: multiStatusResponses
+      tags: [content-types]
+      summary: >
+        Multiple explicit status codes, a "default" response, response
+        headers, and a Link object.
+      responses:
+        "200":
+          description: Success.
+          headers:
+            X-Rate-Limit-Remaining:
+              schema:
+                type: integer
+            X-Request-Id:
+              schema:
+                type: string
+                format: uuid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResult"
+          links:
+            GetCreatedResource:
+              operationId: primitiveTypesAndFormats
+              description: Link to a related operation.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+        "429":
+          description: Rate limited.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+        default:
+          description: Unexpected error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResult"
+
+  # ======================================================================
+  # SECURITY SCHEMES
+  # ======================================================================
+
+  /security/api-key:
+    get:
+      operationId: apiKeySecured
+      tags: [security]
+      summary: apiKey security scheme.
+      security:
+        - apiKeyAuth: []
+      responses:
+        "200":
+          description: OK
+
+  /security/basic:
+    get:
+      operationId: basicAuthSecured
+      tags: [security]
+      summary: HTTP Basic security scheme.
+      security:
+        - basicAuth: []
+      responses:
+        "200":
+          description: OK
+
+  /security/bearer-jwt:
+    get:
+      operationId: bearerJwtSecured
+      tags: [security]
+      summary: HTTP Bearer (JWT) security scheme.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+
+  /security/oauth2:
+    get:
+      operationId: oauth2Secured
+      tags: [security]
+      summary: OAuth2 with scoped access, all four flow types defined on the scheme.
+      security:
+        - oauth2Auth: [read:orders, write:orders]
+      responses:
+        "200":
+          description: OK
+
+  /security/openid-connect:
+    get:
+      operationId: openIdConnectSecured
+      tags: [security]
+      summary: OpenID Connect security scheme.
+      security:
+        - openIdAuth: []
+      responses:
+        "200":
+          description: OK
+
+  /security/combined-and-or:
+    get:
+      operationId: combinedSecurityRequirements
+      tags: [security]
+      summary: >
+        Security requirement array = OR between options; object with
+        multiple schemes = AND within an option. Also includes an
+        anonymous-allowed override ({} entry).
+      security:
+        - apiKeyAuth: []
+          bearerAuth: []
+        - oauth2Auth: [read:orders]
+        - {}
+      responses:
+        "200":
+          description: OK
+
+  # ======================================================================
+  # STRUCTURAL / META FEATURES
+  # ======================================================================
+
+  /structural/callbacks:
+    post:
+      operationId: registerWebhook
+      tags: [structural]
+      summary: Callback object describing an out-of-band webhook the server will call.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [callbackUrl]
+              properties:
+                callbackUrl:
+                  type: string
+                  format: uri
+      callbacks:
+        onOrderStatusChange:
+          "{$request.body#/callbackUrl}":
+            post:
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      type: object
+                      properties:
+                        orderId: { type: string }
+                        status: { type: string }
+              responses:
+                "200":
+                  description: Callback acknowledged.
+      responses:
+        "201":
+          description: Webhook registered.
+
+  /structural/deprecated-operation:
+    get:
+      operationId: deprecatedOperation
+      tags: [structural]
+      summary: Whole operation marked deprecated.
+      deprecated: true
+      responses:
+        "200":
+          description: OK
+
+  /structural/parameter-inheritance/{resourceId}:
+    parameters:
+      - name: resourceId
+        in: path
+        required: true
+        description: Defined at path-item level; inherited by every operation below.
+        schema:
+          type: string
+      - name: X-Common-Header
+        in: header
+        schema:
+          type: string
+    get:
+      operationId: pathLevelParamInheritanceGet
+      tags: [structural]
+      summary: Inherits resourceId + X-Common-Header from the path item.
+      responses:
+        "200":
+          description: OK
+    delete:
+      operationId: pathLevelParamInheritanceDelete
+      tags: [structural]
+      summary: Also inherits resourceId + X-Common-Header; adds its own param.
+      parameters:
+        - name: force
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Deleted.
+
+  /structural/servers-override:
+    get:
+      operationId: operationLevelServerOverride
+      tags: [structural]
+      summary: Overrides the global servers list at the operation level.
+      servers:
+        - url: "https://legacy.api.example.com/v0"
+          description: Legacy server used only by this operation.
+      responses:
+        "200":
+          description: OK
+
+components:
+  schemas:
+    PrimitiveShowcase:
+      type: object
+      required: [stringField, intField]
+      properties:
+        stringField:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "^[A-Za-z0-9_-]+$"
+          example: "abc-123"
+        emailField:
+          type: string
+          format: email
+        uuidField:
+          type: string
+          format: uuid
+        uriField:
+          type: string
+          format: uri
+        hostnameField:
+          type: string
+          format: hostname
+        ipv4Field:
+          type: string
+          format: ipv4
+        ipv6Field:
+          type: string
+          format: ipv6
+        dateField:
+          type: string
+          format: date
+        dateTimeField:
+          type: string
+          format: date-time
+        byteField:
+          type: string
+          format: byte
+          description: base64-encoded string
+        binaryField:
+          type: string
+          format: binary
+        passwordField:
+          type: string
+          format: password
+          writeOnly: true
+        intField:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 1000
+        int64Field:
+          type: integer
+          format: int64
+        exclusiveRangeField:
+          type: integer
+          exclusiveMinimum: true
+          exclusiveMaximum: true
+          minimum: 0
+          maximum: 100
+        multipleOfField:
+          type: integer
+          multipleOf: 5
+        floatField:
+          type: number
+          format: float
+        doubleField:
+          type: number
+          format: double
+        boolField:
+          type: boolean
+          default: false
+        enumField:
+          type: string
+          enum: [low, medium, high]
+        nullableStringField:
+          type: string
+          nullable: true
+        readOnlyField:
+          type: string
+          readOnly: true
+        arrayField:
+          type: array
+          items:
+            type: string
+
+    User:
+      type: object
+      xml:
+        name: User
+      required: [id, username]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+
+    SuccessResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          type: object
+          additionalProperties: true
+
+    ErrorResult:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+        code:
+          type: integer
+
+    # ---- composition / discriminator ----
+    PaymentMethod:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+        mapping:
+          card: "#/components/schemas/CardPayment"
+          bank_transfer: "#/components/schemas/BankTransferPayment"
+      oneOf:
+        - $ref: "#/components/schemas/CardPayment"
+        - $ref: "#/components/schemas/BankTransferPayment"
+
+    PaymentMethodBase:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+
+    CardPayment:
+      allOf:
+        - $ref: "#/components/schemas/PaymentMethodBase"
+        - type: object
+          required: [cardNumber, expiry]
+          properties:
+            type:
+              type: string
+              enum: [card]
+            cardNumber:
+              type: string
+              pattern: "^[0-9]{16}$"
+            expiry:
+              type: string
+              pattern: "^(0[1-9]|1[0-2])\\/[0-9]{2}$"
+            cvv:
+              type: string
+              writeOnly: true
+              minLength: 3
+              maxLength: 4
+
+    BankTransferPayment:
+      allOf:
+        - $ref: "#/components/schemas/PaymentMethodBase"
+        - type: object
+          required: [iban]
+          properties:
+            type:
+              type: string
+              enum: [bank_transfer]
+            iban:
+              type: string
+            notAllOfThis:
+              not:
+                type: string
+                enum: [forbidden_value]
+
+    AnyOfExample:
+      description: A value that may satisfy any (one or more) of the listed schemas.
+      anyOf:
+        - type: string
+        - type: integer
+        - type: boolean
+
+  parameters:
+    SharedPageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    SharedSizeParam:
+      name: size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Malformed request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResult"
+
+  headers:
+    RateLimitLimit:
+      description: Total requests allowed in the current window.
+      schema:
+        type: integer
+
+  requestBodies:
+    UserBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/User"
+
+  examples:
+    SampleUser:
+      summary: A sample user object.
+      value:
+        id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        username: "jdoe"
+        email: "jdoe@example.com"
+        createdAt: "2026-01-01T00:00:00Z"
+
+  securitySchemes:
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    basicAuth:
+      type: http
+      scheme: basic
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    oauth2Auth:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: "https://auth.example.com/oauth/authorize"
+          tokenUrl: "https://auth.example.com/oauth/token"
+          refreshUrl: "https://auth.example.com/oauth/refresh"
+          scopes:
+            read:orders: Read access to orders
+            write:orders: Write access to orders
+        implicit:
+          authorizationUrl: "https://auth.example.com/oauth/authorize"
+          scopes:
+            read:orders: Read access to orders
+        password:
+          tokenUrl: "https://auth.example.com/oauth/token"
+          scopes:
+            read:orders: Read access to orders
+        clientCredentials:
+          tokenUrl: "https://auth.example.com/oauth/token"
+          scopes:
+            read:orders: Read access to orders
+    openIdAuth:
+      type: openIdConnect
+      openIdConnectUrl: "https://auth.example.com/.well-known/openid-configuration"

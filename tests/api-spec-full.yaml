@@ -1,0 +1,379 @@
+openapi: 3.0.3
+info:
+  title: Order Service Gateway (Full Validation Spec)
+  version: "1.0.0"
+  description: >
+    Exhaustive test spec for temporal-gateway's x-temporal parsing. Every
+    action type, every documented StartWorkflowOptions field, every
+    placeholder origin ({path}, {body}, {query}, {header}, {uuidv7}), every
+    enum value, env-var substitution (with and without fallback), and both
+    single-action and multi-action (fan-out) operations are represented at
+    least once. Endpoints are grouped and commented by what they are meant
+    to validate - this file is not meant to represent a realistic API.
+
+paths:
+  # --------------------------------------------------------------------
+  # 1) BASELINE - mirrors the original example (multi-action startWorkflow)
+  # --------------------------------------------------------------------
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Start a new order workflow + fire a delayed notification workflow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId, customerId]
+              properties:
+                orderId:
+                  type: string
+                customerId:
+                  type: string
+                items:
+                  type: array
+                  items:
+                    type: string
+      x-temporal:
+        - action: startWorkflow
+          workflowType: OrderWorkflow
+          workflowId: "order-{body.orderId}"
+          taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
+          idReusePolicy: RejectDuplicate
+          workflowIdConflictPolicy: UseExisting
+          workflowExecutionTimeout: 24h
+          workflowRunTimeout: 1h
+          workflowTaskTimeout: 10s
+          retryPolicy:
+            initialInterval: 1s
+            backoffCoefficient: 2.0
+            maximumInterval: 1m
+            maximumAttempts: 3
+            nonRetryableErrorTypes:
+              - InvalidOrderError
+          memo:
+            source: gateway
+          staticSummary: "Order workflow started via gateway"
+        - action: startWorkflow
+          workflowType: NotificationWorkflow
+          workflowId: "order-{body.orderId}-notification"
+          taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+          startDelay: 5s
+      responses:
+        "202":
+          description: Order and notification workflows started.
+
+  # --------------------------------------------------------------------
+  # 2) queryWorkflow - path placeholder only
+  # --------------------------------------------------------------------
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Fetch the current state of an order via a workflow query.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: queryWorkflow
+          workflowId: "order-{path.orderId}"
+          queryType: getOrderState
+      responses:
+        "200":
+          description: Current order state.
+
+  # --------------------------------------------------------------------
+  # 3) signalWorkflow - optional request body
+  # --------------------------------------------------------------------
+  /orders/{orderId}/cancel:
+    post:
+      operationId: cancelOrder
+      summary: Signal a running order workflow to cancel.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      x-temporal:
+        - action: signalWorkflow
+          workflowId: "order-{path.orderId}"
+          signalName: cancelOrder
+      responses:
+        "202":
+          description: Cancellation signal accepted.
+
+  # --------------------------------------------------------------------
+  # 4) getResult - blocking read, no body
+  # --------------------------------------------------------------------
+  /orders/{orderId}/result:
+    get:
+      operationId: getOrderResult
+      summary: Block until the order workflow completes and return its result.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: getResult
+          workflowId: "order-{path.orderId}"
+      responses:
+        "200":
+          description: Workflow result.
+
+  # --------------------------------------------------------------------
+  # 5) {uuidv7} placeholder + query-origin placeholder + header-origin
+  #    placeholder + env var WITHOUT a fallback (required var)
+  # --------------------------------------------------------------------
+  /orders/{orderId}/line-items:
+    post:
+      operationId: addLineItem
+      summary: >
+        Append a line item. Exercises {uuidv7}, {query.*}, {header.*}, and a
+        required env var with no fallback (ITEMS_TASK_QUEUE must be set or
+        spec loading should fail).
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: correlationId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: X-Request-Source
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sku, quantity]
+              properties:
+                sku:
+                  type: string
+                quantity:
+                  type: integer
+      x-temporal:
+        - action: startWorkflow
+          workflowType: LineItemWorkflow
+          workflowId: "line-item-{uuidv7}"
+          taskQueue: "${ITEMS_TASK_QUEUE}"
+          idReusePolicy: AllowDuplicate
+          workflowIdConflictPolicy: Fail
+          memo:
+            orderId: "{path.orderId}"
+            correlationId: "{query.correlationId}"
+            source: "{header.X-Request-Source}"
+      responses:
+        "202":
+          description: Line item workflow started.
+
+  # --------------------------------------------------------------------
+  # 6) cronSchedule (mutually exclusive with startDelay) + searchAttributes
+  #    + enableEagerStart + staticDetails
+  # --------------------------------------------------------------------
+  /orders/{orderId}/schedule-reconciliation:
+    post:
+      operationId: scheduleReconciliation
+      summary: Start a recurring cron-scheduled reconciliation workflow.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: startWorkflow
+          workflowType: ReconciliationWorkflow
+          workflowId: "reconcile-{path.orderId}"
+          taskQueue: "${RECONCILIATION_TASK_QUEUE:-reconciliation-task-queue}"
+          cronSchedule: "0 */6 * * *"
+          workflowIdConflictPolicy: TerminateExisting
+          enableEagerStart: true
+          searchAttributes:
+            OrderId: "{path.orderId}"
+            WorkflowCategory: "reconciliation"
+          staticSummary: "Recurring reconciliation"
+          staticDetails: "Runs every 6 hours to reconcile order state with the ledger."
+      responses:
+        "202":
+          description: Reconciliation schedule created.
+
+  # --------------------------------------------------------------------
+  # 7) idReusePolicy + workflowIdConflictPolicy enum sweep, plus
+  #    workflowExecutionErrorWhenAlreadyStarted and priority block
+  # --------------------------------------------------------------------
+  /workflows/adhoc:
+    post:
+      operationId: startAdhocWorkflow
+      summary: >
+        Kitchen-sink startWorkflow: every StartWorkflowOptions field,
+        idReusePolicy=AllowDuplicateFailedOnly, workflowIdConflictPolicy=Fail,
+        priority (priorityKey/fairnessKey/fairnessWeight),
+        workflowExecutionErrorWhenAlreadyStarted=true.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId, customerId]
+              properties:
+                jobId:
+                  type: string
+                customerId:
+                  type: string
+                payload:
+                  type: object
+                  additionalProperties: true
+      x-temporal:
+        - action: startWorkflow
+          workflowType: AdhocJobWorkflow
+          workflowId: "adhoc-{body.jobId}-{body.customerId}"
+          taskQueue: "${ADHOC_TASK_QUEUE:-adhoc-task-queue}"
+          idReusePolicy: AllowDuplicateFailedOnly
+          workflowIdConflictPolicy: Fail
+          workflowExecutionErrorWhenAlreadyStarted: true
+          workflowExecutionTimeout: 48h
+          workflowRunTimeout: 2h
+          workflowTaskTimeout: 30s
+          retryPolicy:
+            initialInterval: 500ms
+            backoffCoefficient: 1.5
+            maximumInterval: 30s
+            maximumAttempts: 10
+            nonRetryableErrorTypes:
+              - ValidationError
+              - PermissionDeniedError
+          memo:
+            requestedBy: "{body.customerId}"
+          searchAttributes:
+            JobId: "{body.jobId}"
+          enableEagerStart: false
+          staticSummary: "Ad-hoc job"
+          staticDetails: "Kitchen-sink example exercising every StartWorkflowOptions field."
+          priority:
+            priorityKey: 3
+            fairnessKey: "{body.customerId}"
+            fairnessWeight: 2.5
+      responses:
+        "202":
+          description: Ad-hoc workflow started.
+
+  # --------------------------------------------------------------------
+  # 8) idReusePolicy=TerminateIfRunning, workflowIdConflictPolicy=UseExisting,
+  #    startDelay (mutually exclusive with cronSchedule, shown for contrast)
+  # --------------------------------------------------------------------
+  /workflows/singleton/{tenantId}:
+    put:
+      operationId: upsertSingletonWorkflow
+      summary: >
+        Ensure a single long-running per-tenant workflow exists, replacing a
+        running one if present. Exercises idReusePolicy=TerminateIfRunning
+        and startDelay.
+      parameters:
+        - name: tenantId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: startWorkflow
+          workflowType: TenantSingletonWorkflow
+          workflowId: "tenant-singleton-{path.tenantId}"
+          taskQueue: "${TENANT_TASK_QUEUE:-tenant-task-queue}"
+          idReusePolicy: TerminateIfRunning
+          workflowIdConflictPolicy: UseExisting
+          startDelay: 2s
+          workflowExecutionTimeout: 720h
+      responses:
+        "202":
+          description: Singleton workflow upserted.
+
+  # --------------------------------------------------------------------
+  # 9) Multi-action fan-out mixing THREE different action types on one call
+  # --------------------------------------------------------------------
+  /orders/{orderId}/escalate:
+    post:
+      operationId: escalateOrder
+      summary: >
+        Single HTTP call that signals the running order workflow, starts a
+        new escalation workflow, and immediately queries escalation state -
+        exercises signalWorkflow + startWorkflow + queryWorkflow together.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                severity:
+                  type: string
+                  enum: [low, medium, high, critical]
+      x-temporal:
+        - action: signalWorkflow
+          workflowId: "order-{path.orderId}"
+          signalName: escalationRaised
+        - action: startWorkflow
+          workflowType: EscalationWorkflow
+          workflowId: "escalation-{path.orderId}-{uuidv7}"
+          taskQueue: "${ESCALATIONS_TASK_QUEUE:-escalations-task-queue}"
+          workflowIdConflictPolicy: Fail
+          memo:
+            reason: "{body.reason}"
+            severity: "{body.severity}"
+        - action: queryWorkflow
+          workflowId: "order-{path.orderId}"
+          queryType: getEscalationState
+      responses:
+        "202":
+          description: Escalation signaled, started, and current state returned.
+
+  # --------------------------------------------------------------------
+  # 10) Env var fallback containing special characters / empty-string default
+  # --------------------------------------------------------------------
+  /health/taskqueue-probe:
+    get:
+      operationId: taskQueueProbe
+      summary: Query a probe workflow, exercising an env fallback of "".
+      x-temporal:
+        - action: queryWorkflow
+          workflowId: "probe-{uuidv7}"
+          queryType: ping
+      responses:
+        "200":
+          description: Probe result.
+      x-notes: >
+        taskQueue intentionally omitted here since queryWorkflow targets an
+        existing execution and does not require one; included only to show
+        that not every action needs every field.

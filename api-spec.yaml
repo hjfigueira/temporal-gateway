@@ -1,0 +1,140 @@
+openapi: 3.0.3
+info:
+  title: Order Service Gateway
+  version: "1.0.0"
+  description: >
+    Sample API specification for temporal-gateway. Every operation carries an
+    x-temporal list describing how the HTTP call is translated into one or
+    more Temporal actions - most operations trigger a single action, but a
+    call can dispatch to several workflows by listing more than one binding.
+    workflowId (and other x-temporal string fields) may reference request
+    data via "{origin.field}" placeholders, where origin is one of path,
+    body, query, or header (e.g. "order-{path.orderId}-{body.customerId}"),
+    plus the reserved "{uuidv7}" keyword to generate a fresh UUIDv7. Any
+    value in this file may also reference an environment variable using
+    shell-style expansion, e.g. below "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+    substitutes the NOTIFICATIONS_TASK_QUEUE env var, falling back to
+    notifications-task-queue if it's unset. A reference without a fallback
+    fails spec loading if the variable isn't set. A startWorkflow binding may
+    also set any of go.temporal.io/sdk/client's StartWorkflowOptions:
+    workflowExecutionTimeout, workflowRunTimeout, workflowTaskTimeout (all
+    durations like "30s"/"5m"/"24h"), workflowIdConflictPolicy (Fail,
+    UseExisting, or TerminateExisting), workflowExecutionErrorWhenAlreadyStarted,
+    retryPolicy (initialInterval, backoffCoefficient, maximumInterval,
+    maximumAttempts, nonRetryableErrorTypes), cronSchedule, startDelay
+    (mutually exclusive with cronSchedule), memo, searchAttributes,
+    enableEagerStart, staticSummary, staticDetails, and priority
+    (priorityKey, fairnessKey, fairnessWeight). This file is referenced by
+    the main gateway config (see config.yml -> apiSpec).
+
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Start a new order workflow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ orderId, customerId ]
+              properties:
+                orderId:
+                  type: string
+                customerId:
+                  type: string
+                items:
+                  type: array
+                  items:
+                    type: string
+      x-temporal:
+        - action: startWorkflow
+          workflowType: OrderWorkflow
+          workflowId: "order-{body.orderId}"
+          taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
+          idReusePolicy: RejectDuplicate
+          workflowIdConflictPolicy: UseExisting
+          workflowExecutionTimeout: 24h
+          workflowRunTimeout: 1h
+          workflowTaskTimeout: 10s
+          retryPolicy:
+            initialInterval: 1s
+            backoffCoefficient: 2.0
+            maximumInterval: 1m
+            maximumAttempts: 3
+            nonRetryableErrorTypes:
+              - InvalidOrderError
+          memo:
+            source: gateway
+          staticSummary: "Order workflow started via gateway"
+        - action: startWorkflow
+          workflowType: NotificationWorkflow
+          workflowId: "order-{body.orderId}-notification"
+          taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+          startDelay: 5s
+      responses:
+        "202":
+          description: Order and notification workflows started.
+
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Fetch the current state of an order via a workflow query.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: queryWorkflow
+          workflowId: "order-{path.orderId}"
+          queryType: getOrderState
+      responses:
+        "200":
+          description: Current order state.
+
+  /orders/{orderId}/cancel:
+    post:
+      operationId: cancelOrder
+      summary: Signal a running order workflow to cancel.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      x-temporal:
+        - action: signalWorkflow
+          workflowId: "order-{path.orderId}"
+          signalName: cancelOrder
+      responses:
+        "202":
+          description: Cancellation signal accepted.
+
+  /orders/{orderId}/result:
+    get:
+      operationId: getOrderResult
+      summary: Block until the order workflow completes and return its result.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      x-temporal:
+        - action: getResult
+          workflowId: "order-{path.orderId}"
+      responses:
+        "200":
+          description: Workflow result.
