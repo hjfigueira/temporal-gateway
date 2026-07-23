@@ -33,7 +33,7 @@ type trackingDispatcher struct {
 	seen map[string]bool
 }
 
-func (d *trackingDispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *trackingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (any, error) {
 	d.mu.Lock()
 	if d.seen == nil {
 		d.seen = map[string]bool{}
@@ -70,7 +70,7 @@ type failingDispatcher struct {
 	err error
 }
 
-func (d *failingDispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *failingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, _ string, _ any) (any, error) {
 	return nil, d.err
 }
 

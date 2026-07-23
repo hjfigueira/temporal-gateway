@@ -11,7 +11,7 @@ import (
 )
 
 // reference matches "${VAR}" and "${VAR:-default}".
-var reference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+var reference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?}`)
 
 // Expand replaces every "${VAR}" or "${VAR:-default}" reference in data with
 // the named environment variable's value. If the variable is unset and no

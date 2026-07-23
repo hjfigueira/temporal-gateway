@@ -21,7 +21,7 @@ type recordingDispatcher struct {
 	called bool
 }
 
-func (d *recordingDispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *recordingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (any, error) {
 	d.called = true
 	return map[string]string{"workflowId": workflowID}, nil
 }

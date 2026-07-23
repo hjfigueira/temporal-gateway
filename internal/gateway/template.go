@@ -11,7 +11,7 @@ import (
 
 // templatePlaceholder matches a "{name}" placeholder in a workflowId
 // template.
-var templatePlaceholder = regexp.MustCompile(`\{([^{}]+)\}`)
+var templatePlaceholder = regexp.MustCompile(`\{([^{}]+)}`)
 
 // renderTemplate substitutes "{name}" placeholders in tmpl using resolve,
 // e.g. renderTemplate("order-{path.orderId}", resolve) -> "order-o1" when

@@ -17,6 +17,9 @@ func TestResolveReuseAndConflictPolicyTranslatesTerminateIfRunning(t *testing.T)
 	if conflict != enumspb.WORKFLOW_ID_CONFLICT_POLICY_TERMINATE_EXISTING {
 		t.Errorf("conflict policy = %v, want TERMINATE_EXISTING", conflict)
 	}
+	// Deliberately referencing the deprecated value: this assertion only
+	// has meaning if it names the exact thing that must never be produced.
+	//goland:noinspection GoDeprecation
 	if reuse == enumspb.WORKFLOW_ID_REUSE_POLICY_TERMINATE_IF_RUNNING {
 		t.Error("must not use the deprecated TERMINATE_IF_RUNNING value")
 	}

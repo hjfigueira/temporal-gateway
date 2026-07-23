@@ -71,7 +71,10 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 
 		var body any
 		if r.Body != nil {
-			defer r.Body.Close()
+			// The error from closing a request body isn't actionable (the
+			// request handling is already complete either way), but discard
+			// it explicitly rather than leaving it unchecked.
+			defer func() { _ = r.Body.Close() }()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 				writeJSON(w, http.StatusBadRequest, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
 				return
@@ -250,5 +253,7 @@ func errorResponse(err error) (response.Status, int, string) {
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(payload)
+	// Once WriteHeader has been called, an Encode error here means the
+	// client already disconnected - nothing left to do about it.
+	_ = json.NewEncoder(w).Encode(payload)
 }

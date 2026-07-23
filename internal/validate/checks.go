@@ -90,11 +90,11 @@ func checkArray(schema map[string]any, data []any, path string, out *[]violation
 // keywords to a JSON string value.
 func checkString(schema map[string]any, value string, path string, out *[]violation) {
 	label := displayField(path)
-	if min, ok := toInt(schema["minLength"]); ok && len(value) < min {
-		*out = append(*out, violation{path, msgMinLength(label, min)})
+	if minLen, ok := toInt(schema["minLength"]); ok && len(value) < minLen {
+		*out = append(*out, violation{path, msgMinLength(label, minLen)})
 	}
-	if max, ok := toInt(schema["maxLength"]); ok && len(value) > max {
-		*out = append(*out, violation{path, msgMaxLength(label, max)})
+	if maxLen, ok := toInt(schema["maxLength"]); ok && len(value) > maxLen {
+		*out = append(*out, violation{path, msgMaxLength(label, maxLen)})
 	}
 	if patternRaw, ok := schema["pattern"].(string); ok {
 		re, err := regexp.Compile(patternRaw)
@@ -108,10 +108,10 @@ func checkString(schema map[string]any, value string, path string, out *[]violat
 // number value.
 func checkNumber(schema map[string]any, value float64, path string, out *[]violation) {
 	label := displayField(path)
-	if min, ok := toFloat(schema["minimum"]); ok && value < min {
-		*out = append(*out, violation{path, msgMin(label, min)})
+	if minVal, ok := toFloat(schema["minimum"]); ok && value < minVal {
+		*out = append(*out, violation{path, msgMin(label, minVal)})
 	}
-	if max, ok := toFloat(schema["maximum"]); ok && value > max {
-		*out = append(*out, violation{path, msgMax(label, max)})
+	if maxVal, ok := toFloat(schema["maximum"]); ok && value > maxVal {
+		*out = append(*out, violation{path, msgMax(label, maxVal)})
 	}
 }
