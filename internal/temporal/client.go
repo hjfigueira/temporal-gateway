@@ -10,16 +10,32 @@ import (
 	"fmt"
 
 	"go.temporal.io/sdk/client"
+	sdkotel "go.temporal.io/sdk/contrib/opentelemetry"
 
 	"temporal-gateway/internal/config"
 )
 
-// NewClient dials the Temporal cluster described by cfg.
+// NewClient dials the Temporal cluster described by cfg. Every call the
+// returned client makes (ExecuteWorkflow, SignalWorkflow, ...) is wrapped
+// with go.temporal.io/sdk/contrib/opentelemetry's tracing interceptor,
+// which reads the current span from the call's context.Context and
+// propagates its trace context into the Temporal request's Header - so a
+// span internal/gateway starts for an incoming HTTP request carries through
+// to the workflow it dispatches (see internal/telemetry for how that
+// span's TracerProvider is configured). The interceptor uses the
+// process-global TracerProvider, so this is a safe no-op when telemetry is
+// disabled.
 func NewClient(cfg config.TemporalConfig) (client.Client, error) {
+	tracingInterceptor, err := sdkotel.NewTracingInterceptor(sdkotel.TracerOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("temporal: build tracing interceptor: %w", err)
+	}
+
 	options := client.Options{
-		HostPort:  cfg.HostPort,
+		HostPort:  cfg.Host,
 		Namespace: cfg.Namespace,
 	}
+	options.Interceptors = append(options.Interceptors, tracingInterceptor)
 
 	if cfg.TLS.Enabled {
 		tlsConfig := &tls.Config{}
@@ -35,7 +51,7 @@ func NewClient(cfg config.TemporalConfig) (client.Client, error) {
 
 	c, err := client.Dial(options)
 	if err != nil {
-		return nil, fmt.Errorf("temporal: dial %q: %w", cfg.HostPort, err)
+		return nil, fmt.Errorf("temporal: dial %q: %w", cfg.Host, err)
 	}
 	return c, nil
 }

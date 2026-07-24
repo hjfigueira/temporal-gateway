@@ -39,7 +39,7 @@ type WorkflowDefinition struct {
 }
 
 type TemporalConfig struct {
-	HostPort  string               `yaml:"hostPort"`
+	Host      string               `yaml:"host"`
 	Namespace string               `yaml:"namespace"`
 	TLS       TemporalTLSConfig    `yaml:"tls"`
 	Workflows []WorkflowDefinition `yaml:"workflows"`
@@ -77,6 +77,27 @@ type MiddlewareConfig struct {
 	Config  map[string]any `yaml:"config,omitempty"`
 }
 
+// OTelConfig configures OpenTelemetry distributed tracing (see
+// internal/telemetry.Setup). When Enabled, the gateway starts one span per
+// HTTP request and exports it via OTLP/gRPC to Endpoint; that span's trace
+// context is also propagated into the Temporal headers of every workflow
+// action the request dispatches (see internal/temporal.NewClient), so a
+// workflow's own tracing, if instrumented, continues the same trace.
+type OTelConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// ServiceName identifies this process in the exported spans' resource
+	// attributes (the OpenTelemetry "service.name").
+	ServiceName string `yaml:"serviceName"`
+	// Endpoint is the OTLP/gRPC collector address, e.g. "localhost:4317".
+	Endpoint string `yaml:"endpoint"`
+	// Insecure disables TLS on the connection to Endpoint (typical for a
+	// collector running as a local/sidecar process).
+	Insecure bool `yaml:"insecure"`
+	// SampleRatio is the fraction of traces to sample, from 0 (none) to 1
+	// (all). Values <= 0 are treated as 1 (sample everything).
+	SampleRatio float64 `yaml:"sampleRatio"`
+}
+
 // GatewayConfig is the root of the main configuration file. It links to an
 // API specification (APISpec) that defines the actual HTTP surface.
 type GatewayConfig struct {
@@ -85,6 +106,7 @@ type GatewayConfig struct {
 	APISpec     string             `yaml:"apiSpec"`
 	Auth        AuthConfig         `yaml:"auth"`
 	Middlewares []MiddlewareConfig `yaml:"middlewares"`
+	OTel        OTelConfig         `yaml:"otel"`
 
 	// baseDir is the directory containing the config file, used to resolve
 	// a relative APISpec path regardless of the process's working directory.

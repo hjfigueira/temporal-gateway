@@ -12,9 +12,23 @@ server:
   port: ${GATEWAY_PORT:-8081}
 
 temporal:
-  hostPort: "${TEMPORAL_HOST_PORT:-localhost:7233}"
+  host: "${TEMPORAL_HOST:-localhost:7233}"
   namespace: "${TEMPORAL_NAMESPACE:-default}"
   tls:
     enabled: false
+
+# OpenTelemetry distributed tracing. When enabled, the gateway starts one
+# span per HTTP request and exports it via OTLP/gRPC to endpoint; that
+# span's trace context is also propagated into the Temporal headers of
+# every workflow action the request dispatches, so a workflow's own
+# tracing (if instrumented) continues the same trace. Disabled by default
+# since it requires a reachable OTLP collector (e.g. the OpenTelemetry
+# Collector, Jaeger, or a vendor agent) at endpoint.
+otel:
+  enabled: ${OTEL_ENABLED:-true}
+  serviceName: "${OTEL_SERVICE_NAME:-temporal-gateway}"
+  endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-localhost:4317}"
+  insecure: ${OTEL_EXPORTER_OTLP_INSECURE:-true}
+  sampleRatio: ${OTEL_TRACES_SAMPLER_RATIO:-1.0}
 
 apiSpec: "./api-spec.yaml"

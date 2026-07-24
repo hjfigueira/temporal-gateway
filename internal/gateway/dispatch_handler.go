@@ -10,11 +10,21 @@ import (
 	"net/http"
 	"sync"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"go.temporal.io/api/serviceerror"
 
 	"temporal-gateway/internal/response"
 	"temporal-gateway/internal/spec"
 )
+
+// tracer starts the one span dispatchHandler creates per HTTP request. It
+// resolves against whatever TracerProvider is globally configured when each
+// span starts (see internal/telemetry.Setup); with telemetry disabled, the
+// global provider is a no-op, so these spans cost effectively nothing.
+var tracer = otel.Tracer("temporal-gateway")
 
 // dispatchOutcome is one binding's result from a parallel dispatch: either
 // result or err is set, never both.
@@ -64,6 +74,31 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 	requestBody := route.Operation.RequestBody
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		// This is the first span for the request: its trace context flows
+		// through dispatchAll into dispatcher.Dispatch and on to
+		// client.ExecuteWorkflow/SignalWorkflow/etc, where
+		// go.temporal.io/sdk/contrib/opentelemetry's interceptor (see
+		// internal/temporal.NewClient) propagates it into the Temporal
+		// request's Header - so the workflow this request dispatches
+		// continues the same trace.
+		ctx, span := tracer.Start(r.Context(), route.Operation.OperationID,
+			trace.WithAttributes(
+				attribute.String("temporal_gateway.operation_id", route.Operation.OperationID),
+				attribute.String("http.method", route.Method),
+				attribute.String("http.route", route.Path),
+			),
+		)
+		defer span.End()
+
+		// Enrich the request's logs with the span's identifiers so they can
+		// be correlated with the trace in the OTel backend. A no-op span
+		// (telemetry disabled) has an invalid SpanContext, so logs stay
+		// unchanged in that case.
+		requestLogger := logger
+		if sc := span.SpanContext(); sc.IsValid() {
+			requestLogger = logger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+		}
+
 		pathParams := make(map[string]string, len(paramNames))
 		for _, name := range paramNames {
 			pathParams[name] = r.PathValue(name)
@@ -76,20 +111,31 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 			// it explicitly rather than leaving it unchecked.
 			defer func() { _ = r.Body.Close() }()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "invalid JSON body")
 				writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
 				return
 			}
 		}
 
 		if result := validateBody(requestBody, body); result.Status.IsError() {
+			span.SetStatus(codes.Error, string(result.Status))
 			writeJSON(w, http.StatusUnprocessableEntity, result)
 			return
 		}
 
 		resolve := fieldResolver(r, pathParams, body)
 
-		outcomes := dispatchAll(r.Context(), dispatcher, bindings, resolve, body)
-		items, statuses, succeeded := collectResults(route, bindings, outcomes, logger)
+		outcomes := dispatchAll(ctx, dispatcher, bindings, resolve, body)
+		items, statuses, succeeded := collectResults(route, bindings, outcomes, requestLogger)
+
+		span.SetAttributes(
+			attribute.Int("temporal_gateway.bindings_dispatched", len(bindings)),
+			attribute.Int("temporal_gateway.bindings_succeeded", succeeded),
+		)
+		if succeeded < len(bindings) {
+			span.SetStatus(codes.Error, "one or more x-temporal bindings did not succeed")
+		}
 
 		if len(items) == 1 {
 			writeJSON(w, statuses[0], items[0])

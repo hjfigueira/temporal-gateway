@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"temporal-gateway/internal/config"
+	"temporal-gateway/internal/dotenv"
 	"temporal-gateway/internal/gateway"
 	"temporal-gateway/internal/spec"
+	"temporal-gateway/internal/telemetry"
 	"temporal-gateway/internal/temporal"
 )
 
@@ -29,13 +31,39 @@ func main() {
 	slog.SetDefault(logger)
 
 	configPath := flag.String("config", "config.yml", "path to the gateway config file")
+	envPath := flag.String("env", ".env", "path to a .env file with environment variables (missing file is not an error)")
 	flag.Parse()
+
+	if err := dotenv.Load(*envPath); err != nil {
+		logger.Error("failed to load env file", "env_path", *envPath, "error", err)
+		os.Exit(1)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("failed to load gateway config", "config_path", *configPath, "error", err)
 		os.Exit(1)
 	}
+
+	// Configure tracing before dialing Temporal or building the HTTP
+	// handler, so both pick up the real TracerProvider from the start
+	// rather than the no-op one otel installs by default.
+	shutdownTelemetry, err := telemetry.Setup(context.Background(), cfg.OTel)
+	if err != nil {
+		logger.Error("failed to set up telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Error("failed to shut down telemetry", "error", err)
+		}
+	}()
+	logger.Info("configured telemetry",
+		"otel_enabled", cfg.OTel.Enabled,
+		"otel_endpoint", cfg.OTel.Endpoint,
+	)
 
 	specPath := cfg.ResolveSpecPath()
 	apiSpec, err := spec.Load(specPath)
@@ -52,7 +80,7 @@ func main() {
 	logger.Info("loaded gateway config",
 		"config_path", *configPath,
 		slog.Group("server", "host", cfg.Server.Host, "port", cfg.Server.Port),
-		slog.Group("temporal", "host_port", cfg.Temporal.HostPort, "namespace", cfg.Temporal.Namespace),
+		slog.Group("temporal", "host", cfg.Temporal.Host, "namespace", cfg.Temporal.Namespace),
 		"auth_type", cfg.Auth.Type,
 		"middlewares", middlewares,
 	)
