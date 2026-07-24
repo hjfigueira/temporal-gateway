@@ -76,13 +76,13 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 			// it explicitly rather than leaving it unchecked.
 			defer func() { _ = r.Body.Close() }()
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-				writeJSON(w, http.StatusBadRequest, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
+				writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
 				return
 			}
 		}
 
 		if result := validateBody(requestBody, body); result.Status.IsError() {
-			writeJSON(w, http.StatusBadRequest, result)
+			writeJSON(w, http.StatusUnprocessableEntity, result)
 			return
 		}
 

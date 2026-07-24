@@ -63,10 +63,10 @@ func TestDispatchHandlerValidatesBody(t *testing.T) {
 		wantStatus int
 		wantCalled bool
 	}{
-		{"missing required field", `{"customerId":"c1"}`, http.StatusBadRequest, false},
-		{"wrong field type", `{"orderId":123,"customerId":"c1"}`, http.StatusBadRequest, false},
-		{"empty body when required", ``, http.StatusBadRequest, false},
-		{"malformed json", `{`, http.StatusBadRequest, false},
+		{"missing required field", `{"customerId":"c1"}`, http.StatusUnprocessableEntity, false},
+		{"wrong field type", `{"orderId":123,"customerId":"c1"}`, http.StatusUnprocessableEntity, false},
+		{"empty body when required", ``, http.StatusUnprocessableEntity, false},
+		{"malformed json", `{`, http.StatusUnprocessableEntity, false},
 		{"valid payload", `{"orderId":"o1","customerId":"c1"}`, http.StatusAccepted, true},
 	}
 
@@ -102,8 +102,8 @@ func TestDispatchHandlerValidationResponseShape(t *testing.T) {
 
 	handler(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
 	if dispatcher.called {
 		t.Error("dispatcher should not be called for an invalid request")
