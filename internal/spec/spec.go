@@ -43,12 +43,17 @@ const (
 // SearchAttributes, an untyped map, is deprecated in favor of
 // TypedSearchAttributes).
 type TemporalBinding struct {
-	Action       TemporalAction `yaml:"action"`
-	TaskQueue    string         `yaml:"taskQueue,omitempty"`
-	WorkflowType string         `yaml:"workflowType,omitempty"`
-	WorkflowID   string         `yaml:"workflowId,omitempty"`
-	SignalName   string         `yaml:"signalName,omitempty"`
-	QueryType    string         `yaml:"queryType,omitempty"`
+	Action TemporalAction `yaml:"action"`
+	// Namespace selects which of the gateway's configured Temporal
+	// connections (temporal.connections in config.yml) this binding
+	// dispatches against - see internal/temporal.Connections. Required on
+	// every binding, regardless of Action.
+	Namespace    string `yaml:"namespace"`
+	TaskQueue    string `yaml:"taskQueue,omitempty"`
+	WorkflowType string `yaml:"workflowType,omitempty"`
+	WorkflowID   string `yaml:"workflowId,omitempty"`
+	SignalName   string `yaml:"signalName,omitempty"`
+	QueryType    string `yaml:"queryType,omitempty"`
 	// IDReusePolicy additionally accepts "TerminateIfRunning": terminate the
 	// current run if one is already running, otherwise allow reuse of the
 	// ID. The underlying Temporal enum for this is deprecated, so the

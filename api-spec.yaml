@@ -7,6 +7,10 @@ info:
     x-temporal list describing how the HTTP call is translated into one or
     more Temporal actions - most operations trigger a single action, but a
     call can dispatch to several workflows by listing more than one binding.
+    Every binding requires a namespace, naming which of config.yml's
+    temporal.connections entries it dispatches against - different bindings
+    (even on the same operation) may target different namespaces, letting
+    one gateway serve routes across several Temporal namespaces or clusters.
     workflowId (and other x-temporal string fields) may reference request
     data via "{origin.field}" placeholders, where origin is one of path,
     body, query, or header (e.g. "order-{path.orderId}-{body.customerId}"),
@@ -53,6 +57,7 @@ paths:
                     type: string
       x-temporal:
         - action: startWorkflow
+          namespace: "${TEMPORAL_NAMESPACE:-default}"
           workflowType: OrderWorkflow
           workflowId: "order-{body.orderId}"
           taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
@@ -72,6 +77,7 @@ paths:
             source: gateway
           staticSummary: "Order workflow started via gateway"
         - action: startWorkflow
+          namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-default}"
           workflowType: NotificationWorkflow
           workflowId: "order-{body.orderId}-notification"
           taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
@@ -93,6 +99,7 @@ paths:
             type: string
       x-temporal:
         - action: queryWorkflow
+          namespace: "${TEMPORAL_NAMESPACE:-default}"
           workflowId: "order-{path.orderId}"
           queryType: getOrderState
       responses:
@@ -120,6 +127,7 @@ paths:
                   type: string
       x-temporal:
         - action: signalWorkflow
+          namespace: "${TEMPORAL_NAMESPACE:-default}"
           workflowId: "order-{path.orderId}"
           signalName: cancelOrder
       responses:
@@ -138,6 +146,7 @@ paths:
             type: string
       x-temporal:
         - action: getResult
+          namespace: "${TEMPORAL_NAMESPACE:-default}"
           workflowId: "order-{path.orderId}"
       responses:
         "200":

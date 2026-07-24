@@ -77,10 +77,15 @@ func main() {
 		middlewares[i] = map[string]any{"name": mw.Name, "enabled": mw.Enabled}
 	}
 
+	namespaces := make([]string, len(cfg.Temporal.Connections))
+	for i, c := range cfg.Temporal.Connections {
+		namespaces[i] = c.Namespace
+	}
+
 	logger.Info("loaded gateway config",
 		"config_path", *configPath,
 		slog.Group("server", "host", cfg.Server.Host, "port", cfg.Server.Port),
-		slog.Group("temporal", "host", cfg.Temporal.Host, "namespace", cfg.Temporal.Namespace),
+		"temporal_namespaces", namespaces,
 		"auth_type", cfg.Auth.Type,
 		"middlewares", middlewares,
 	)
@@ -93,36 +98,51 @@ func main() {
 
 	for _, route := range apiSpec.Routes() {
 		actions := make([]string, len(route.Operation.Temporal))
+		bindingNamespaces := make([]string, len(route.Operation.Temporal))
 		for i, t := range route.Operation.Temporal {
 			actions[i] = string(t.Action)
+			bindingNamespaces[i] = t.Namespace
 		}
 		logger.Info("route registered",
 			"method", route.Method,
 			"path", route.Path,
 			"operation_id", route.Operation.OperationID,
 			"temporal_actions", actions,
+			"temporal_namespaces", bindingNamespaces,
 		)
 	}
 
-	for _, wf := range cfg.Temporal.Workflows {
-		logger.Info("workflow registered",
-			"workflow_type", wf.Name,
-			"task_queue", wf.TaskQueue,
-			"signals", wf.Signals,
-			"queries", wf.Queries,
-		)
+	for _, conn := range cfg.Temporal.Connections {
+		for _, wf := range conn.Workflows {
+			logger.Info("workflow registered",
+				"namespace", conn.Namespace,
+				"workflow_type", wf.Name,
+				"task_queue", wf.TaskQueue,
+				"signals", wf.Signals,
+				"queries", wf.Queries,
+			)
+		}
 	}
 
-	catalog := temporal.NewCatalog(cfg.Temporal.Workflows)
-
-	temporalClient, err := temporal.NewClient(cfg.Temporal)
+	connections, err := temporal.NewConnections(cfg.Temporal)
 	if err != nil {
+		// NewConnections returns whatever it managed to dial before the
+		// failure (never nil), so this closes those rather than leaking
+		// them.
+		if connections != nil {
+			connections.Close()
+		}
 		logger.Error("failed to connect to temporal", "error", err)
 		os.Exit(1)
 	}
-	defer temporalClient.Close()
+	defer connections.Close()
 
-	dispatcher := temporal.NewDispatcher(temporalClient, catalog)
+	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
+		logger.Error("api spec references unknown temporal namespace", "error", err)
+		os.Exit(1)
+	}
+
+	dispatcher := temporal.NewDispatcher(connections)
 	handler := gateway.NewHandler(apiSpec, dispatcher, logger)
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
@@ -154,7 +174,7 @@ func main() {
 	logger.Info("starting http server", "addr", addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("http server stopped", "error", err)
-		temporalClient.Close()
+		connections.Close()
 		os.Exit(1)
 	}
 }

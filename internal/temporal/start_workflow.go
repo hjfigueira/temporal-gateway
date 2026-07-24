@@ -17,10 +17,10 @@ import (
 // new run (see the priorRunID comment below), the returned Status only
 // claims StatusStarted when a fresh run was actually created; otherwise it
 // reports the pre-existing run's real state via classifyExistingRun.
-func (d *Dispatcher) startWorkflow(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
 	taskQueue := binding.TaskQueue
 	if taskQueue == "" {
-		taskQueue, _ = d.catalog.TaskQueueFor(binding.WorkflowType)
+		taskQueue, _ = conn.Catalog.TaskQueueFor(binding.WorkflowType)
 	}
 
 	options := client.StartWorkflowOptions{
@@ -89,7 +89,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, binding spec.TemporalBin
 	// request latency can easily exceed the gap between two calls.
 	var priorRunID string
 	var priorStatus enumspb.WorkflowExecutionStatus
-	if desc, descErr := d.client.DescribeWorkflowExecution(ctx, workflowID, ""); descErr == nil {
+	if desc, descErr := conn.Client.DescribeWorkflowExecution(ctx, workflowID, ""); descErr == nil {
 		if info := desc.GetWorkflowExecutionInfo(); info != nil {
 			priorRunID = info.GetExecution().GetRunId()
 			priorStatus = info.GetStatus()
@@ -99,7 +99,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, binding spec.TemporalBin
 	// workflow with this ID exists yet), priorRunID stays empty, which
 	// below is correctly read as "nothing to attach to".
 
-	run, err := d.client.ExecuteWorkflow(ctx, options, binding.WorkflowType, args...)
+	run, err := conn.Client.ExecuteWorkflow(ctx, options, binding.WorkflowType, args...)
 	if err != nil {
 		return nil, err
 	}

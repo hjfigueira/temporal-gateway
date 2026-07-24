@@ -38,11 +38,22 @@ type WorkflowDefinition struct {
 	Queries   []string `yaml:"queries,omitempty"`
 }
 
-type TemporalConfig struct {
-	Host      string               `yaml:"host"`
+// TemporalConnectionConfig is one Temporal namespace the gateway dials a
+// client for. The gateway can serve routes against several namespaces (even
+// on different clusters) at once - see internal/temporal.Connections; each
+// x-temporal binding in the API spec names which one it targets via its own
+// namespace field, which must match this Namespace.
+type TemporalConnectionConfig struct {
 	Namespace string               `yaml:"namespace"`
+	Host      string               `yaml:"host"`
 	TLS       TemporalTLSConfig    `yaml:"tls"`
 	Workflows []WorkflowDefinition `yaml:"workflows"`
+}
+
+// TemporalConfig lists every Temporal namespace connection the gateway
+// dials at startup.
+type TemporalConfig struct {
+	Connections []TemporalConnectionConfig `yaml:"connections"`
 }
 
 type APIKeyAuthConfig struct {
@@ -139,8 +150,34 @@ func Load(path string) (*GatewayConfig, error) {
 		return nil, fmt.Errorf("config: %q: apiSpec is required", absPath)
 	}
 
+	if err := cfg.Temporal.validate(); err != nil {
+		return nil, fmt.Errorf("config: %q: %w", absPath, err)
+	}
+
 	cfg.baseDir = filepath.Dir(absPath)
 	return &cfg, nil
+}
+
+// validate checks that temporal.connections declares at least one entry and
+// that every entry has a non-empty, unique namespace - the key
+// internal/temporal.Connections and each x-temporal binding's namespace
+// field resolve a connection by.
+func (c TemporalConfig) validate() error {
+	if len(c.Connections) == 0 {
+		return fmt.Errorf("temporal.connections requires at least one entry")
+	}
+
+	seen := make(map[string]bool, len(c.Connections))
+	for i, conn := range c.Connections {
+		if conn.Namespace == "" {
+			return fmt.Errorf("temporal.connections[%d]: missing namespace", i)
+		}
+		if seen[conn.Namespace] {
+			return fmt.Errorf("temporal.connections[%d]: duplicate namespace %q", i, conn.Namespace)
+		}
+		seen[conn.Namespace] = true
+	}
+	return nil
 }
 
 // ResolveSpecPath returns the absolute path to the API specification,

@@ -69,6 +69,9 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 	if t.Action == "" {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing action", method, path, i))
 	}
+	if t.Namespace == "" {
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing namespace", method, path, i))
+	}
 
 	switch t.Action {
 	case ActionStartWorkflow:

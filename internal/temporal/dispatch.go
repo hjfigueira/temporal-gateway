@@ -4,32 +4,36 @@ import (
 	"context"
 	"fmt"
 
-	"go.temporal.io/sdk/client"
-
 	"temporal-gateway/internal/response"
 	"temporal-gateway/internal/spec"
 )
 
 // Dispatcher executes the Temporal action described by a route's
-// x-temporal binding against a real Temporal client.
+// x-temporal binding against the Connections dictionary entry its
+// Namespace names.
 type Dispatcher struct {
-	client  client.Client
-	catalog *Catalog
+	connections Connections
 }
 
-func NewDispatcher(c client.Client, catalog *Catalog) *Dispatcher {
-	return &Dispatcher{client: c, catalog: catalog}
+func NewDispatcher(connections Connections) *Dispatcher {
+	return &Dispatcher{connections: connections}
 }
 
 // Dispatch runs binding's action against workflowID, using body (may be
-// nil) as the workflow/signal/query input where applicable. It returns a
+// nil) as the workflow/signal/query input where applicable, against the
+// Temporal connection named by binding.Namespace. It returns a
 // JSON-serializable result.
 func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+	conn, err := d.connections.resolve(binding.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
 	switch binding.Action {
 	case spec.ActionStartWorkflow:
-		return d.startWorkflow(ctx, binding, workflowID, body)
+		return d.startWorkflow(ctx, conn, binding, workflowID, body)
 	case spec.ActionSignalWorkflow:
-		if err := d.client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
+		if err := conn.Client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
 			return nil, err
 		}
 		return response.WorkflowSignaled{
@@ -38,9 +42,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 			SignalName: binding.SignalName,
 		}, nil
 	case spec.ActionQueryWorkflow:
-		return d.queryWorkflow(ctx, binding, workflowID, body)
+		return d.queryWorkflow(ctx, conn, binding, workflowID, body)
 	case spec.ActionCancelWorkflow:
-		if err := d.client.CancelWorkflow(ctx, workflowID, ""); err != nil {
+		if err := conn.Client.CancelWorkflow(ctx, workflowID, ""); err != nil {
 			return nil, err
 		}
 		return response.WorkflowAck{
@@ -54,7 +58,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 				reason = r
 			}
 		}
-		if err := d.client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
+		if err := conn.Client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
 			return nil, err
 		}
 		return response.WorkflowAck{
@@ -62,7 +66,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 			WorkflowID: workflowID,
 		}, nil
 	case spec.ActionGetResult:
-		return d.getResult(ctx, workflowID)
+		return d.getResult(ctx, conn, workflowID)
 	default:
 		return nil, fmt.Errorf("unsupported temporal action %q", binding.Action)
 	}
@@ -72,13 +76,13 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 // as-is: unlike the other actions, a query's response is caller-defined
 // business data, not a gateway operation-status acknowledgement, so it's
 // not wrapped in a response.Envelope.
-func (d *Dispatcher) queryWorkflow(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *Dispatcher) queryWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
 	var args []interface{}
 	if body != nil {
 		args = append(args, body)
 	}
 
-	value, err := d.client.QueryWorkflow(ctx, workflowID, "", binding.QueryType, args...)
+	value, err := conn.Client.QueryWorkflow(ctx, workflowID, "", binding.QueryType, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +96,8 @@ func (d *Dispatcher) queryWorkflow(ctx context.Context, binding spec.TemporalBin
 
 // getResult blocks until workflowID's current run completes and returns its
 // decoded result as-is, for the same reason queryWorkflow does.
-func (d *Dispatcher) getResult(ctx context.Context, workflowID string) (any, error) {
-	run := d.client.GetWorkflow(ctx, workflowID, "")
+func (d *Dispatcher) getResult(ctx context.Context, conn *Connection, workflowID string) (any, error) {
+	run := conn.Client.GetWorkflow(ctx, workflowID, "")
 
 	var result any
 	if err := run.Get(ctx, &result); err != nil {

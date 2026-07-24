@@ -1,8 +1,9 @@
-// Package temporal wires the gateway to a real Temporal cluster: dialing a
-// client and dispatching each x-temporal action (startWorkflow,
-// signalWorkflow, queryWorkflow, cancelWorkflow, terminateWorkflow,
-// getResult) against it. Catalog supplies a workflow type's default task
-// queue for bindings that don't set their own.
+// Package temporal wires the gateway to one or more Temporal namespaces
+// (see Connections): dialing a client per namespace and dispatching each
+// x-temporal action (startWorkflow, signalWorkflow, queryWorkflow,
+// cancelWorkflow, terminateWorkflow, getResult) against the connection its
+// binding names. Catalog supplies a workflow type's default task queue for
+// bindings that don't set their own.
 package temporal
 
 import (
@@ -15,7 +16,7 @@ import (
 	"temporal-gateway/internal/config"
 )
 
-// NewClient dials the Temporal cluster described by cfg. Every call the
+// NewClient dials the Temporal namespace described by cfg. Every call the
 // returned client makes (ExecuteWorkflow, SignalWorkflow, ...) is wrapped
 // with go.temporal.io/sdk/contrib/opentelemetry's tracing interceptor,
 // which reads the current span from the call's context.Context and
@@ -25,7 +26,7 @@ import (
 // span's TracerProvider is configured). The interceptor uses the
 // process-global TracerProvider, so this is a safe no-op when telemetry is
 // disabled.
-func NewClient(cfg config.TemporalConfig) (client.Client, error) {
+func NewClient(cfg config.TemporalConnectionConfig) (client.Client, error) {
 	tracingInterceptor, err := sdkotel.NewTracingInterceptor(sdkotel.TracerOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("temporal: build tracing interceptor: %w", err)

@@ -46,6 +46,7 @@ func TestValidateRejectsCronAndStartDelayTogether(t *testing.T) {
 func TestValidateAllowsTerminateIfRunningAlone(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
         - action: startWorkflow
+          namespace: default
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
           taskQueue: widgets-task-queue
@@ -149,6 +150,7 @@ func TestValidateRejectsSearchAttributeValueTypeMismatch(t *testing.T) {
 func TestValidateAcceptsValidSearchAttributes(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
         - action: startWorkflow
+          namespace: default
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
           taskQueue: widgets-task-queue

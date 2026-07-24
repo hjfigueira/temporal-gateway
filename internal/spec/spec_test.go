@@ -34,6 +34,7 @@ paths:
 func TestLoadStartWorkflowOptions(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
         - action: startWorkflow
+          namespace: default
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
           taskQueue: widgets-task-queue

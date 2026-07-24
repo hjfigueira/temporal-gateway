@@ -11,11 +11,21 @@ server:
   host: "${GATEWAY_HOST:-0.0.0.0}"
   port: ${GATEWAY_PORT:-8081}
 
+# Every Temporal namespace the gateway dials a client for at startup. A
+# single gateway process can serve routes against several namespaces - even
+# different clusters - at once: each x-temporal binding in api-spec.yaml
+# names which one it targets via its own "namespace" field, which must
+# match one of these entries' namespace.
 temporal:
-  host: "${TEMPORAL_HOST:-localhost:7233}"
-  namespace: "${TEMPORAL_NAMESPACE:-default}"
-  tls:
-    enabled: false
+  connections:
+    - namespace: "${TEMPORAL_NAMESPACE:-default}"
+      host: "${TEMPORAL_HOST:-localhost:7233}"
+      tls:
+        enabled: false
+    - namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-notifications}"
+      host: "${TEMPORAL_NOTIFICATIONS_HOST:-localhost:7233}"
+      tls:
+        enabled: false
 
 # OpenTelemetry distributed tracing. When enabled, the gateway starts one
 # span per HTTP request and exports it via OTLP/gRPC to endpoint; that
