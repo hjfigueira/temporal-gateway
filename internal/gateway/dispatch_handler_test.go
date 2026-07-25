@@ -80,9 +80,11 @@ func twoBindingRoute() spec.Route {
 		Path:   "/orders",
 		Operation: &spec.Operation{
 			OperationID: "createOrder",
-			Temporal: []spec.TemporalBinding{
-				{Action: spec.ActionStartWorkflow, WorkflowType: "OrderWorkflow", WorkflowID: "order-{body.orderId}"},
-				{Action: spec.ActionStartWorkflow, WorkflowType: "NotificationWorkflow", WorkflowID: "order-{body.orderId}-notification"},
+			Temporal: spec.TemporalSpec{
+				Triggers: []spec.TemporalBinding{
+					{Action: spec.ActionStartWorkflow, WorkflowType: "OrderWorkflow", WorkflowID: "order-{body.orderId}"},
+					{Action: spec.ActionStartWorkflow, WorkflowType: "NotificationWorkflow", WorkflowID: "order-{body.orderId}-notification"},
+				},
 			},
 		},
 	}
@@ -93,7 +95,16 @@ func twoBindingRoute() spec.Route {
 // the same workflow naming as the multi-binding tests.
 func twoBindingRouteSingle() spec.Route {
 	route := twoBindingRoute()
-	route.Operation.Temporal = route.Operation.Temporal[:1]
+	route.Operation.Temporal.Triggers = route.Operation.Temporal.Triggers[:1]
+	return route
+}
+
+// allOrNothingRoute is twoBindingRoute() with returnStrategy set to
+// allOrNothing, so the "reject on any incomplete trigger" path can be
+// exercised with the same workflow naming as the acceptPartial tests.
+func allOrNothingRoute() spec.Route {
+	route := twoBindingRoute()
+	route.Operation.Temporal.ReturnStrategy = spec.ReturnStrategyAllOrNothing
 	return route
 }
 
@@ -266,7 +277,7 @@ func TestDispatchHandlerAttachingToExistingRunIsNotStarted(t *testing.T) {
 
 	t.Run("single binding attaching to an existing run returns 409, not STARTED", func(t *testing.T) {
 		route := twoBindingRoute()
-		route.Operation.Temporal = route.Operation.Temporal[:1]
+		route.Operation.Temporal.Triggers = route.Operation.Temporal.Triggers[:1]
 		dispatcher := &trackingDispatcher{existingIDs: map[string]bool{"order-o1": true}}
 		handler := dispatchHandler(route, dispatcher, logger)
 
@@ -344,5 +355,85 @@ func TestDispatchHandlerSingleBindingFailureKeepsSpecificStatus(t *testing.T) {
 	msg, _ := envelope["message"].(string)
 	if !strings.Contains(msg, "OrderWorkflow") {
 		t.Errorf("message = %q, want it to name the failing workflow (OrderWorkflow)", msg)
+	}
+}
+
+// TestDispatchHandlerAllOrNothingRejectsAnyIncompleteTrigger checks
+// x-temporal.returnStrategy: allOrNothing - a genuine mix of outcomes that
+// would be 207 Multi-Status under the default acceptPartial strategy
+// instead comes back as a single 409 Conflict, since not every trigger
+// completed.
+func TestDispatchHandlerAllOrNothingRejectsAnyIncompleteTrigger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true}}
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if !dispatcher.wasDispatched("order-o1-notification") {
+		t.Error("expected the second binding to still be attempted even though the first failed and the overall result was rejected")
+	}
+
+	var batch struct {
+		Status  string           `json:"status"`
+		Results []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
+		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
+	}
+	if batch.Status != string(response.StatusWorkflowNotStarted) {
+		t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowNotStarted)
+	}
+	if len(batch.Results) != 2 {
+		t.Fatalf("expected 2 items, got %d: %+v", len(batch.Results), batch.Results)
+	}
+}
+
+// TestDispatchHandlerAllOrNothingAcceptsUniformSuccess checks that
+// allOrNothing doesn't change anything about the case where every trigger
+// actually does succeed.
+func TestDispatchHandlerAllOrNothingAcceptsUniformSuccess(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{}
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+
+	var batch struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
+		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
+	}
+	if batch.Status != string(response.StatusWorkflowStarted) {
+		t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowStarted)
+	}
+}
+
+// TestDispatchHandlerAllOrNothingRejectsUniformFailure checks that a total
+// failure under allOrNothing also comes back as 409, not whatever
+// error-specific status the first item would carry under acceptPartial.
+func TestDispatchHandlerAllOrNothingRejectsUniformFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true, "order-o1-notification": true}}
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }

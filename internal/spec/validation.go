@@ -41,6 +41,15 @@ var validSearchAttributeTypes = map[string]bool{
 	"keywordList": true,
 }
 
+// validReturnStrategies mirrors the TemporalSpec.ReturnStrategy values
+// internal/gateway's writeBatchResult understands. "" is valid - it means
+// Strategy() falls back to ReturnStrategyAcceptPartial.
+var validReturnStrategies = map[ReturnStrategy]bool{
+	"":                          true,
+	ReturnStrategyAcceptPartial: true,
+	ReturnStrategyAllOrNothing:  true,
+}
+
 // validate checks every operation's x-temporal bindings and returns a
 // single error joining every problem found (via errors.Error(), one per
 // line), rather than stopping at the first, so a misconfigured spec can be
@@ -49,11 +58,14 @@ func (s *Spec) validate() error {
 	var errs []error
 	for path, item := range s.Paths {
 		for method, op := range item.operations() {
-			if len(op.Temporal) == 0 {
-				errs = append(errs, fmt.Errorf("%s %s: missing x-temporal", method, path))
+			if len(op.Temporal.Triggers) == 0 {
+				errs = append(errs, fmt.Errorf("%s %s: missing x-temporal.triggers", method, path))
 				continue
 			}
-			for i, t := range op.Temporal {
+			if !validReturnStrategies[op.Temporal.ReturnStrategy] {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal: unknown returnStrategy %q", method, path, op.Temporal.ReturnStrategy))
+			}
+			for i, t := range op.Temporal.Triggers {
 				errs = append(errs, validateBinding(method, path, i, t)...)
 			}
 		}
@@ -61,16 +73,17 @@ func (s *Spec) validate() error {
 	return errors.Join(errs...)
 }
 
-// validateBinding checks one x-temporal[i] entry against the rules for its
-// declared Action, returning every problem found (not just the first).
+// validateBinding checks one x-temporal.triggers[i] entry against the rules
+// for its declared Action, returning every problem found (not just the
+// first).
 func validateBinding(method, path string, i int, t TemporalBinding) []error {
 	var errs []error
 
 	if t.Action == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing action", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing action", method, path, i))
 	}
 	if t.Namespace == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing namespace", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing namespace", method, path, i))
 	}
 
 	switch t.Action {
@@ -78,22 +91,22 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 		errs = append(errs, validateStartWorkflowBinding(method, path, i, t)...)
 	case ActionSignalWorkflow:
 		if t.SignalName == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: signalWorkflow requires signalName", method, path, i))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: signalWorkflow requires signalName", method, path, i))
 		}
 	case ActionQueryWorkflow:
 		if t.QueryType == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: queryWorkflow requires queryType", method, path, i))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: queryWorkflow requires queryType", method, path, i))
 		}
 	case ActionCancelWorkflow, ActionTerminateWorkflow, ActionGetResult:
 		// no action-specific required fields beyond workflowId.
 	case "":
 		// already reported above as "missing action".
 	default:
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown action %q", method, path, i, t.Action))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: unknown action %q", method, path, i, t.Action))
 	}
 
 	if t.WorkflowID == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: missing workflowId", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing workflowId", method, path, i))
 	}
 
 	return errs
@@ -107,22 +120,22 @@ func validateStartWorkflowBinding(method, path string, i int, t TemporalBinding)
 	var errs []error
 
 	if t.WorkflowType == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: startWorkflow requires workflowType", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: startWorkflow requires workflowType", method, path, i))
 	}
 	if t.TaskQueue == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: startWorkflow requires taskQueue", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: startWorkflow requires taskQueue", method, path, i))
 	}
 	if !validIDReusePolicies[t.IDReusePolicy] {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown idReusePolicy %q", method, path, i, t.IDReusePolicy))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: unknown idReusePolicy %q", method, path, i, t.IDReusePolicy))
 	}
 	if !validIDConflictPolicies[t.WorkflowIDConflictPolicy] {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: unknown workflowIdConflictPolicy %q", method, path, i, t.WorkflowIDConflictPolicy))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: unknown workflowIdConflictPolicy %q", method, path, i, t.WorkflowIDConflictPolicy))
 	}
 	if t.IDReusePolicy == "TerminateIfRunning" && t.WorkflowIDConflictPolicy != "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: idReusePolicy TerminateIfRunning cannot be combined with workflowIdConflictPolicy (TerminateIfRunning already implies TerminateExisting)", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: idReusePolicy TerminateIfRunning cannot be combined with workflowIdConflictPolicy (TerminateIfRunning already implies TerminateExisting)", method, path, i))
 	}
 	if t.CronSchedule != "" && t.StartDelay != "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: cronSchedule and startDelay cannot both be set", method, path, i))
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: cronSchedule and startDelay cannot both be set", method, path, i))
 	}
 
 	durations := []struct{ name, value string }{
@@ -142,20 +155,20 @@ func validateStartWorkflowBinding(method, path string, i int, t TemporalBinding)
 			continue
 		}
 		if _, err := time.ParseDuration(d.value); err != nil {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: invalid %s %q: %w", method, path, i, d.name, d.value, err))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: invalid %s %q: %w", method, path, i, d.name, d.value, err))
 		}
 	}
 
 	for j, sa := range t.SearchAttributes {
 		if sa.Name == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: missing name", method, path, i, j))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: searchAttributes[%d]: missing name", method, path, i, j))
 		}
 		if !validSearchAttributeTypes[sa.Type] {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d]: unknown type %q", method, path, i, j, sa.Type))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: searchAttributes[%d]: unknown type %q", method, path, i, j, sa.Type))
 			continue
 		}
 		if err := validateSearchAttributeValue(sa); err != nil {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: searchAttributes[%d] %q: %w", method, path, i, j, sa.Name, err))
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: searchAttributes[%d] %q: %w", method, path, i, j, sa.Name, err))
 		}
 	}
 

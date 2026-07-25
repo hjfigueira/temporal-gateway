@@ -58,19 +58,24 @@ func (o dispatchOutcome) succeeded() bool {
 }
 
 // dispatchHandler resolves path params and the JSON body, then renders and
-// dispatches each of the operation's x-temporal bindings in parallel, so
+// dispatches each of the operation's x-temporal.triggers in parallel, so
 // one HTTP call can trigger several Temporal actions at once and a failure
-// in one binding doesn't prevent the others from starting. When more than
-// one binding is dispatched, the response is a response.BatchResult: a
-// top-level status of WORKFLOW_STARTED if every binding succeeded,
+// in one trigger doesn't prevent the others from starting. When more than
+// one trigger is dispatched, the response is a response.BatchResult: a
+// top-level status of WORKFLOW_STARTED if every trigger succeeded,
 // WORKFLOW_NOT_STARTED if none did, or WORKFLOW_PARTIALLY_STARTED if it's a
-// genuine mix of both - plus each binding's own per-item result (each
-// naming which workflow it's about). Only that genuine-mix case is reported
-// under HTTP 207 Multi-Status; a uniform outcome (all started, or none did)
-// gets an ordinary single status code.
+// genuine mix of both - plus each trigger's own per-item result (each
+// naming which workflow it's about). How that maps to an HTTP status
+// depends on the operation's x-temporal.returnStrategy (see
+// writeBatchResult): under the default "acceptPartial", only the
+// genuine-mix case is reported under HTTP 207 Multi-Status, with a uniform
+// outcome (all started, or none did) getting an ordinary single status
+// code; under "allOrNothing", anything short of every trigger succeeding is
+// reported as HTTP 409 Conflict.
 func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
-	bindings := route.Operation.Temporal
+	bindings := route.Operation.Temporal.Triggers
+	returnStrategy := route.Operation.Temporal.Strategy()
 	requestBody := route.Operation.RequestBody
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +146,7 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 			writeJSON(w, statuses[0], items[0])
 			return
 		}
-		writeBatchResult(w, items, statuses, succeeded)
+		writeBatchResult(w, items, statuses, succeeded, returnStrategy)
 	}
 }
 
@@ -151,6 +156,17 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 // prevent the others in the same request from starting.
 func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.TemporalBinding, resolve func(string) (string, bool), body any) []dispatchOutcome {
 	outcomes := make([]dispatchOutcome, len(bindings))
+
+	// The common case is a single binding per operation, where spawning a
+	// goroutine just for fan-out buys no parallelism - it only costs a
+	// stack allocation and a scheduling round trip on every request.
+	if len(bindings) == 1 {
+		workflowID := renderTemplate(bindings[0].WorkflowID, resolve)
+		result, err := dispatcher.Dispatch(ctx, bindings[0], workflowID, body)
+		outcomes[0] = dispatchOutcome{workflowID: workflowID, result: result, err: err}
+		return outcomes
+	}
+
 	var wg sync.WaitGroup
 	for i, binding := range bindings {
 		wg.Add(1)
@@ -229,34 +245,49 @@ func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes 
 }
 
 // writeBatchResult picks the top-level response.BatchResult status and HTTP
-// code for a multi-binding dispatch: 207 Multi-Status only for a genuine
-// mix of outcomes (see dispatchHandler's doc comment for the full rule).
-func writeBatchResult(w http.ResponseWriter, items []any, statuses []int, succeeded int) {
-	message := fmt.Sprintf("%d of %d workflow(s) started", succeeded, len(items))
+// code for a multi-trigger dispatch. Every trigger succeeding is always
+// reported the same way, regardless of strategy. Short of that:
+//
+//   - ReturnStrategyAllOrNothing treats a partial mix the same as a total
+//     failure - at least one trigger didn't complete, so the whole operation
+//     is rejected with 409 Conflict.
+//   - ReturnStrategyAcceptPartial (the default) reports a genuine mix (at
+//     least one succeeded, at least one didn't) as 207 Multi-Status, so the
+//     caller can see exactly which triggers succeeded; a uniform failure
+//     (none did) isn't a "multi" status, so it gets an ordinary single
+//     status code from the first item instead.
+func writeBatchResult(w http.ResponseWriter, items []any, statuses []int, succeeded int, strategy spec.ReturnStrategy) {
+	total := len(items)
+	message := fmt.Sprintf("%d of %d workflow(s) started", succeeded, total)
 
-	switch {
-	case succeeded == len(items):
-		status := statuses[0]
-		writeJSON(w, status, response.BatchResult{
+	if succeeded == total {
+		writeJSON(w, statuses[0], response.BatchResult{
 			Envelope: response.Envelope{Status: response.StatusWorkflowStarted, Message: message},
 			Results:  items,
 		})
-	case succeeded == 0:
-		// Nothing started: a uniform outcome, however many different
-		// underlying reasons, so this isn't a "multi" status - report it
-		// as a single failure using the first item's HTTP status.
+		return
+	}
+
+	if strategy == spec.ReturnStrategyAllOrNothing {
+		writeJSON(w, http.StatusConflict, response.BatchResult{
+			Envelope: response.Envelope{Status: response.StatusWorkflowNotStarted, Message: message},
+			Results:  items,
+		})
+		return
+	}
+
+	if succeeded == 0 {
 		writeJSON(w, statuses[0], response.BatchResult{
 			Envelope: response.Envelope{Status: response.StatusWorkflowNotStarted, Message: message},
 			Results:  items,
 		})
-	default:
-		// A genuine mix of outcomes: no single HTTP status code could
-		// describe it, hence Multi-Status.
-		writeJSON(w, http.StatusMultiStatus, response.BatchResult{
-			Envelope: response.Envelope{Status: response.StatusWorkflowPartiallyStarted, Message: message},
-			Results:  items,
-		})
+		return
 	}
+
+	writeJSON(w, http.StatusMultiStatus, response.BatchResult{
+		Envelope: response.Envelope{Status: response.StatusWorkflowPartiallyStarted, Message: message},
+		Results:  items,
+	})
 }
 
 // workflowLabel names a binding for inclusion in a failure message, so a

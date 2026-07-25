@@ -4,22 +4,28 @@ info:
   version: "1.0.0"
   description: >
     Sample API specification for temporal-gateway. Every operation carries an
-    x-temporal list describing how the HTTP call is translated into one or
-    more Temporal actions - most operations trigger a single action, but a
-    call can dispatch to several workflows by listing more than one binding.
-    Every binding requires a namespace, naming which of config.yml's
-    temporal.connections entries it dispatches against - different bindings
-    (even on the same operation) may target different namespaces, letting
-    one gateway serve routes across several Temporal namespaces or clusters.
-    workflowId (and other x-temporal string fields) may reference request
-    data via "{origin.field}" placeholders, where origin is one of path,
-    body, query, or header (e.g. "order-{path.orderId}-{body.customerId}"),
-    plus the reserved "{uuidv7}" keyword to generate a fresh UUIDv7. Any
-    value in this file may also reference an environment variable using
-    shell-style expansion, e.g. below "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
-    substitutes the NOTIFICATIONS_TASK_QUEUE env var, falling back to
+    x-temporal object with a triggers list describing how the HTTP call is
+    translated into one or more Temporal actions - most operations trigger a
+    single action, but a call can dispatch to several workflows by listing
+    more than one trigger. Every trigger requires a namespace, naming which
+    of config.yml's temporal.connections entries it dispatches against -
+    different triggers (even on the same operation) may target different
+    namespaces, letting one gateway serve routes across several Temporal
+    namespaces or clusters. x-temporal also takes a sibling returnStrategy,
+    which governs how a multi-trigger operation's overall HTTP response is
+    derived from its triggers' individual outcomes: "acceptPartial" (the
+    default) reports a genuine mix of outcomes as 207 Multi-Status, while
+    "allOrNothing" rejects the whole call with 409 Conflict unless every
+    trigger completed. workflowId (and other x-temporal string fields) may
+    reference request data via "{origin.field}" placeholders, where origin is
+    one of path, body, query, or header (e.g.
+    "order-{path.orderId}-{body.customerId}"), plus the reserved "{uuidv7}"
+    keyword to generate a fresh UUIDv7. Any value in this file may also
+    reference an environment variable using shell-style expansion, e.g. below
+    "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}" substitutes the
+    NOTIFICATIONS_TASK_QUEUE env var, falling back to
     notifications-task-queue if it's unset. A reference without a fallback
-    fails spec loading if the variable isn't set. A startWorkflow binding may
+    fails spec loading if the variable isn't set. A startWorkflow trigger may
     also set any of go.temporal.io/sdk/client's StartWorkflowOptions:
     workflowExecutionTimeout, workflowRunTimeout, workflowTaskTimeout (all
     durations like "30s"/"5m"/"24h"), workflowIdConflictPolicy (Fail,
@@ -56,33 +62,41 @@ paths:
                   items:
                     type: string
       x-temporal:
-        - action: startWorkflow
-          namespace: "${TEMPORAL_NAMESPACE:-default}"
-          workflowType: OrderWorkflow
-          workflowId: "order-{body.orderId}"
-          taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
-          idReusePolicy: AllowDuplicate
-          workflowIdConflictPolicy: TerminateExisting
-          workflowExecutionTimeout: 24h
-          workflowRunTimeout: 1h
-          workflowTaskTimeout: 10s
-          retryPolicy:
-            initialInterval: 1s
-            backoffCoefficient: 2.0
-            maximumInterval: 1m
-            maximumAttempts: 3
-            nonRetryableErrorTypes:
-              - InvalidOrderError
-          memo:
-            source: gateway
-          staticSummary: "Order workflow started via gateway"
-        - action: startWorkflow
-          namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-default}"
-          workflowType: NotificationWorkflow
-          workflowId: "order-{body.orderId}-notification"
-          taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
-          idReusePolicy: RejectDuplicate
-          startDelay: 5s
+        # acceptPartial (the default, shown explicitly here) means the order
+        # workflow starting is not contingent on the notification workflow
+        # also starting: if one trigger fails, the response is 207
+        # Multi-Status naming exactly which one - it's not rolled back to
+        # allOrNothing's single 409, since a stuck notification shouldn't
+        # block the order itself from being created.
+        returnStrategy: acceptPartial
+        triggers:
+          - action: startWorkflow
+            namespace: "${TEMPORAL_NAMESPACE:-default}"
+            workflowType: OrderWorkflow
+            workflowId: "order-{body.orderId}"
+            taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
+            idReusePolicy: AllowDuplicate
+            workflowIdConflictPolicy: TerminateExisting
+            workflowExecutionTimeout: 24h
+            workflowRunTimeout: 1h
+            workflowTaskTimeout: 10s
+            retryPolicy:
+              initialInterval: 1s
+              backoffCoefficient: 2.0
+              maximumInterval: 1m
+              maximumAttempts: 3
+              nonRetryableErrorTypes:
+                - InvalidOrderError
+            memo:
+              source: gateway
+            staticSummary: "Order workflow started via gateway"
+          - action: startWorkflow
+            namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-default}"
+            workflowType: NotificationWorkflow
+            workflowId: "order-{body.orderId}-notification"
+            taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+            idReusePolicy: RejectDuplicate
+            startDelay: 5s
       responses:
         "202":
           description: Order and notification workflows started.
@@ -98,10 +112,11 @@ paths:
           schema:
             type: string
       x-temporal:
-        - action: queryWorkflow
-          namespace: "${TEMPORAL_NAMESPACE:-default}"
-          workflowId: "order-{path.orderId}"
-          queryType: getOrderState
+        triggers:
+          - action: queryWorkflow
+            namespace: "${TEMPORAL_NAMESPACE:-default}"
+            workflowId: "order-{path.orderId}"
+            queryType: getOrderState
       responses:
         "200":
           description: Current order state.
@@ -126,10 +141,11 @@ paths:
                 reason:
                   type: string
       x-temporal:
-        - action: signalWorkflow
-          namespace: "${TEMPORAL_NAMESPACE:-default}"
-          workflowId: "order-{path.orderId}"
-          signalName: cancelOrder
+        triggers:
+          - action: signalWorkflow
+            namespace: "${TEMPORAL_NAMESPACE:-default}"
+            workflowId: "order-{path.orderId}"
+            signalName: cancelOrder
       responses:
         "202":
           description: Cancellation signal accepted.
@@ -145,9 +161,10 @@ paths:
           schema:
             type: string
       x-temporal:
-        - action: getResult
-          namespace: "${TEMPORAL_NAMESPACE:-default}"
-          workflowId: "order-{path.orderId}"
+        triggers:
+          - action: getResult
+            namespace: "${TEMPORAL_NAMESPACE:-default}"
+            workflowId: "order-{path.orderId}"
       responses:
         "200":
           description: Workflow result.

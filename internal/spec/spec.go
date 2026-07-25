@@ -1,10 +1,16 @@
 // Package spec loads the API specification: an OpenAPI 3.0 document whose
-// operations carry an "x-temporal" extension listing one or more Temporal
-// actions the HTTP operation maps to (start/signal/query a workflow, etc),
-// so a single call can dispatch to multiple workflows. The gateway uses this
-// in-memory representation as the basis for generating routes at runtime.
-// Before parsing, the raw file is run through envsubst.Expand, so values may
-// reference "${VAR}" or "${VAR:-default}" environment variables.
+// operations carry an "x-temporal" extension naming, under "triggers", one
+// or more Temporal actions the HTTP operation maps to (start/signal/query a
+// workflow, etc), so a single call can dispatch to multiple workflows - plus
+// a sibling "returnStrategy" governing how those triggers' outcomes combine
+// into the operation's overall HTTP response when there's more than one
+// (see TemporalSpec). The specification may be split across more than one
+// file (config.yml's apiSpec), which Load merges into a single Spec, later
+// files taking precedence over earlier ones operation-by-operation (see
+// Spec.merge). The gateway uses this in-memory representation as the basis
+// for generating routes at runtime. Before parsing, each raw file is run
+// through envsubst.Expand, so values may reference "${VAR}" or
+// "${VAR:-default}" environment variables.
 package spec
 
 import (
@@ -28,6 +34,46 @@ const (
 	ActionTerminateWorkflow TemporalAction = "terminateWorkflow"
 	ActionGetResult         TemporalAction = "getResult"
 )
+
+// ReturnStrategy governs how an operation's overall HTTP response is derived
+// from its triggers' individual outcomes when it has more than one (a
+// single-trigger operation always reports that trigger's own outcome
+// directly, regardless of this setting).
+type ReturnStrategy string
+
+const (
+	// ReturnStrategyAcceptPartial is the default: a genuine mix of outcomes
+	// (at least one trigger succeeded, at least one didn't) is reported as
+	// HTTP 207 Multi-Status, so the caller can see exactly which triggers
+	// succeeded. A uniform outcome (all or none) gets an ordinary single
+	// status code.
+	ReturnStrategyAcceptPartial ReturnStrategy = "acceptPartial"
+	// ReturnStrategyAllOrNothing treats anything short of every trigger
+	// succeeding as a single failure: the operation reports HTTP 409
+	// Conflict whenever at least one trigger didn't complete, rather than
+	// 207 for a partial mix.
+	ReturnStrategyAllOrNothing ReturnStrategy = "allOrNothing"
+)
+
+// TemporalSpec is the "x-temporal" vendor extension attached to an
+// operation: the list of Temporal actions it dispatches to (Triggers) plus
+// how their outcomes combine into the operation's overall HTTP response
+// (ReturnStrategy).
+type TemporalSpec struct {
+	// ReturnStrategy defaults to ReturnStrategyAcceptPartial when empty (see
+	// Strategy).
+	ReturnStrategy ReturnStrategy    `yaml:"returnStrategy,omitempty"`
+	Triggers       []TemporalBinding `yaml:"triggers"`
+}
+
+// Strategy returns t.ReturnStrategy, defaulting to ReturnStrategyAcceptPartial
+// when it wasn't set in the spec.
+func (t TemporalSpec) Strategy() ReturnStrategy {
+	if t.ReturnStrategy == "" {
+		return ReturnStrategyAcceptPartial
+	}
+	return t.ReturnStrategy
+}
 
 // TemporalBinding is the "x-temporal" vendor extension attached to an
 // operation. Which fields are meaningful depends on Action, e.g. TaskQueue
@@ -136,15 +182,15 @@ type RequestBody struct {
 }
 
 // Operation is one HTTP method entry under a path (OpenAPI's operation
-// object), extended with the "x-temporal" list describing what it does
+// object), extended with the "x-temporal" extension describing what it does
 // against Temporal.
 type Operation struct {
-	OperationID string            `yaml:"operationId"`
-	Summary     string            `yaml:"summary,omitempty"`
-	Parameters  []Parameter       `yaml:"parameters,omitempty"`
-	RequestBody *RequestBody      `yaml:"requestBody,omitempty"`
-	Responses   map[string]any    `yaml:"responses,omitempty"`
-	Temporal    []TemporalBinding `yaml:"x-temporal"`
+	OperationID string         `yaml:"operationId"`
+	Summary     string         `yaml:"summary,omitempty"`
+	Parameters  []Parameter    `yaml:"parameters,omitempty"`
+	RequestBody *RequestBody   `yaml:"requestBody,omitempty"`
+	Responses   map[string]any `yaml:"responses,omitempty"`
+	Temporal    TemporalSpec   `yaml:"x-temporal"`
 }
 
 // PathItem is the set of HTTP methods declared for one path (OpenAPI's path
@@ -165,19 +211,46 @@ type Info struct {
 	Description string `yaml:"description,omitempty"`
 }
 
-// Spec is the in-memory representation of the loaded API specification.
+// Spec is the in-memory representation of the loaded API specification,
+// possibly merged from more than one file (see Load).
 type Spec struct {
 	OpenAPI string              `yaml:"openapi"`
 	Info    Info                `yaml:"info"`
 	Paths   map[string]PathItem `yaml:"paths"`
 }
 
-// Load reads path, expands "${VAR}"/"${VAR:-default}" environment
-// references, parses it as the Spec YAML document, and validates every
-// operation's x-temporal bindings (see validate.go) before returning it -
-// so a misconfigured spec fails at startup rather than on the first
-// request that hits the bad route.
-func Load(path string) (*Spec, error) {
+// Load reads each of paths, expands "${VAR}"/"${VAR:-default}" environment
+// references in each, parses it as a Spec YAML document, and merges them in
+// order into a single Spec (see Spec.merge) - later paths take precedence
+// over earlier ones for any operation they both define, so a later file can
+// extend or override an earlier one (e.g. a base spec plus an
+// environment-specific overrides file). The merged result is validated (see
+// validate.go) before being returned, so a misconfigured spec fails at
+// startup rather than on the first request that hits the bad route.
+func Load(paths ...string) (*Spec, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("spec: no api spec paths given")
+	}
+
+	merged := &Spec{Paths: map[string]PathItem{}}
+	for _, path := range paths {
+		s, err := loadOne(path)
+		if err != nil {
+			return nil, err
+		}
+		merged.merge(s)
+	}
+
+	if err := merged.validate(); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+
+	return merged, nil
+}
+
+// loadOne reads and parses a single spec file - see Load, which merges and
+// validates the result across every configured path.
+func loadOne(path string) (*Spec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("spec: read %q: %w", path, err)
@@ -193,9 +266,57 @@ func Load(path string) (*Spec, error) {
 		return nil, fmt.Errorf("spec: parse %q: %w", path, err)
 	}
 
-	if err := s.validate(); err != nil {
-		return nil, fmt.Errorf("spec: %q: %w", path, err)
-	}
-
 	return &s, nil
+}
+
+// merge folds other into s: other's OpenAPI/Info fields override s's where
+// set (non-empty), and other's paths are merged in one HTTP method at a
+// time - an operation other declares for a (path, method) s already has
+// entirely replaces it, rather than the two being combined field by field,
+// so a later spec file can cleanly supersede an earlier one's definition of
+// the same endpoint.
+func (s *Spec) merge(other *Spec) {
+	if other.OpenAPI != "" {
+		s.OpenAPI = other.OpenAPI
+	}
+	s.Info.merge(other.Info)
+
+	for path, item := range other.Paths {
+		s.Paths[path] = s.Paths[path].merge(item)
+	}
+}
+
+// merge returns i with every method other sets overriding i's own - see
+// Spec.merge.
+func (i PathItem) merge(other PathItem) PathItem {
+	if other.Get != nil {
+		i.Get = other.Get
+	}
+	if other.Post != nil {
+		i.Post = other.Post
+	}
+	if other.Put != nil {
+		i.Put = other.Put
+	}
+	if other.Patch != nil {
+		i.Patch = other.Patch
+	}
+	if other.Delete != nil {
+		i.Delete = other.Delete
+	}
+	return i
+}
+
+// merge overwrites i's fields with any other sets (non-empty) - see
+// Spec.merge.
+func (i *Info) merge(other Info) {
+	if other.Title != "" {
+		i.Title = other.Title
+	}
+	if other.Version != "" {
+		i.Version = other.Version
+	}
+	if other.Description != "" {
+		i.Description = other.Description
+	}
 }

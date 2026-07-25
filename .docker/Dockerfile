@@ -20,4 +20,10 @@ COPY config.yml api-spec.yaml ./
 USER nonroot:nonroot
 EXPOSE 8081
 
+# Soft memory cap: the runtime GCs more aggressively as usage approaches
+# this instead of letting RSS grow to ~2x live heap under load. Override
+# per-deployment (docker run -e / k8s env) to match the container's actual
+# memory limit.
+ENV GOMEMLIMIT=300MiB
+
 ENTRYPOINT ["./temporal-gateway"]

@@ -70,9 +70,9 @@ func (c Connections) Close() {
 func ValidateNamespaces(apiSpec *spec.Spec, conns Connections) error {
 	var errs []error
 	for _, route := range apiSpec.Routes() {
-		for i, binding := range route.Operation.Temporal {
+		for i, binding := range route.Operation.Temporal.Triggers {
 			if _, ok := conns[binding.Namespace]; !ok {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal[%d]: namespace %q has no temporal.connections entry in config", route.Method, route.Path, i, binding.Namespace))
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: namespace %q has no temporal.connections entry in config", route.Method, route.Path, i, binding.Namespace))
 			}
 		}
 	}

@@ -1,8 +1,8 @@
 // Package config loads the main gateway configuration: server settings,
-// the Temporal connection, authentication, middlewares, and the path to the
-// API specification that drives route generation. Before parsing, the raw
-// file is run through envsubst.Expand, so values may reference "${VAR}" or
-// "${VAR:-default}" environment variables.
+// the Temporal connection, authentication, middlewares, and the path(s) to
+// the API specification(s) that drive route generation. Before parsing, the
+// raw file is run through envsubst.Expand, so values may reference "${VAR}"
+// or "${VAR:-default}" environment variables.
 package config
 
 import (
@@ -109,12 +109,41 @@ type OTelConfig struct {
 	SampleRatio float64 `yaml:"sampleRatio"`
 }
 
-// GatewayConfig is the root of the main configuration file. It links to an
-// API specification (APISpec) that defines the actual HTTP surface.
+// APISpecPaths is one or more paths to API specification files. In YAML it
+// accepts either a single scalar ("apiSpec: ./api-spec.yaml") or a list
+// ("apiSpec: [./base.yaml, ./overrides.yaml]"), so existing single-file
+// configs keep working unchanged. When more than one path is given, the
+// gateway loads and merges them into a single API spec (see spec.Load) -
+// later files take precedence over earlier ones for any operation they both
+// define, so a later entry can override or extend a base spec.
+type APISpecPaths []string
+
+// UnmarshalYAML implements the scalar-or-list decoding described on
+// APISpecPaths.
+func (p *APISpecPaths) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var single string
+		if err := value.Decode(&single); err != nil {
+			return err
+		}
+		*p = APISpecPaths{single}
+		return nil
+	}
+
+	var list []string
+	if err := value.Decode(&list); err != nil {
+		return fmt.Errorf("apiSpec: must be a string or a list of strings: %w", err)
+	}
+	*p = list
+	return nil
+}
+
+// GatewayConfig is the root of the main configuration file. It links to one
+// or more API specifications (APISpec) that define the actual HTTP surface.
 type GatewayConfig struct {
 	Server      ServerConfig       `yaml:"server"`
 	Temporal    TemporalConfig     `yaml:"temporal"`
-	APISpec     string             `yaml:"apiSpec"`
+	APISpec     APISpecPaths       `yaml:"apiSpec"`
 	Auth        AuthConfig         `yaml:"auth"`
 	Middlewares []MiddlewareConfig `yaml:"middlewares"`
 	OTel        OTelConfig         `yaml:"otel"`
@@ -146,7 +175,7 @@ func Load(path string) (*GatewayConfig, error) {
 		return nil, fmt.Errorf("config: parse %q: %w", absPath, err)
 	}
 
-	if cfg.APISpec == "" {
+	if len(cfg.APISpec) == 0 {
 		return nil, fmt.Errorf("config: %q: apiSpec is required", absPath)
 	}
 
@@ -180,12 +209,18 @@ func (c TemporalConfig) validate() error {
 	return nil
 }
 
-// ResolveSpecPath returns the absolute path to the API specification,
-// resolving it relative to the directory containing the loaded config file
-// when APISpec is not already absolute.
-func (c *GatewayConfig) ResolveSpecPath() string {
-	if filepath.IsAbs(c.APISpec) {
-		return c.APISpec
+// ResolveSpecPaths returns the absolute paths to every configured API
+// specification, in the order they should be merged (see spec.Load), each
+// resolved relative to the directory containing the loaded config file when
+// not already absolute.
+func (c *GatewayConfig) ResolveSpecPaths() []string {
+	paths := make([]string, len(c.APISpec))
+	for i, p := range c.APISpec {
+		if filepath.IsAbs(p) {
+			paths[i] = p
+			continue
+		}
+		paths[i] = filepath.Join(c.baseDir, p)
 	}
-	return filepath.Join(c.baseDir, c.APISpec)
+	return paths
 }

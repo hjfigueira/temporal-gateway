@@ -47,8 +47,10 @@ func createOrderRoute() spec.Route {
 					},
 				},
 			},
-			Temporal: []spec.TemporalBinding{
-				{Action: spec.ActionStartWorkflow, WorkflowType: "OrderWorkflow", WorkflowID: "order-{body.orderId}"},
+			Temporal: spec.TemporalSpec{
+				Triggers: []spec.TemporalBinding{
+					{Action: spec.ActionStartWorkflow, WorkflowType: "OrderWorkflow", WorkflowID: "order-{body.orderId}"},
+				},
 			},
 		},
 	}

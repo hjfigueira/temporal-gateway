@@ -10,9 +10,11 @@ dispatches the calls - no handler code to write or maintain.
 
 - **Spec-driven routing** - routes are generated from `api-spec.yaml`; adding an endpoint
   is a YAML change, not a code change.
-- **One call, many workflows** - an operation's `x-temporal` is a list, so a single HTTP
-  request can start/signal/query several workflows at once (dispatched concurrently).
-- **Multi-namespace** - each `x-temporal` binding names which configured Temporal
+- **One call, many workflows** - an operation's `x-temporal.triggers` is a list, so a
+  single HTTP request can start/signal/query several workflows at once (dispatched
+  concurrently), with `x-temporal.returnStrategy` controlling how their outcomes combine
+  into one HTTP response.
+- **Multi-namespace** - each `x-temporal.triggers` entry names which configured Temporal
   namespace (even a different cluster) it targets, so one gateway can front several.
 - **Templated workflow IDs** - `workflowId: "order-{path.orderId}-{body.customerId}"`,
   with `{origin.field}` placeholders (`path`, `body`, `query`, `header`) plus a
@@ -86,10 +88,11 @@ A pre-built image is published to GHCR on every GitHub Release (see
 
 ## CLI flags
 
-| Flag       | Default      | Description                                                          |
-|------------|--------------|------------------------------------------------------------------------|
-| `--config` | `config.yml` | Path to the gateway config file                                      |
-| `--env`    | `.env`       | Path to a `.env` file to load into the process environment before config parsing (a missing file is not an error) |
+| Flag         | Default      | Description                                                          |
+|--------------|--------------|------------------------------------------------------------------------|
+| `--config`   | `config.yml` | Path to the gateway config file                                      |
+| `--env`      | `.env`       | Path to a `.env` file to load into the process environment before config parsing (a missing file is not an error) |
+| `--dry-run`  | `false`      | Load and validate the config, API spec, and Temporal connections/namespaces, then exit (0 on success, 1 on the first failure) without starting the HTTP server |
 
 ## Configuration (`config.yml`)
 
@@ -120,22 +123,28 @@ apiSpec: "./api-spec.yaml"
 ```
 
 - **`temporal.connections`** - one entry per Temporal namespace the gateway should dial.
-  At least one is required, each `namespace` must be unique, and every `x-temporal`
-  binding in the API spec must name a `namespace` present here (checked at startup, not
-  at request time).
+  At least one is required, each `namespace` must be unique, and every
+  `x-temporal.triggers` entry in the API spec must name a `namespace` present here
+  (checked at startup, not at request time).
 - **`otel`** - when `enabled` (the default), the gateway starts one span per request and
   exports it via OTLP/gRPC to `endpoint`, propagating trace context into the dispatched
   workflow's Temporal headers. The gRPC connection is non-blocking, so a missing
   collector at `endpoint` doesn't stop the gateway from starting - spans just fail to
   export.
 - **`apiSpec`** - path to the OpenAPI spec, resolved relative to `config.yml`'s directory
-  if not absolute.
+  if not absolute. Also accepts a list of paths (`apiSpec: ["./base.yaml",
+  "./overrides.yaml"]`), which are loaded and merged into a single spec, in order. A
+  later file's operation (method + path) replaces an earlier file's definition of that
+  same operation entirely; operations that only appear in one file are unaffected. This
+  is useful for splitting a large spec across files, or layering an environment-specific
+  overrides file on top of a shared base.
 - Any scalar value in this file may use `${VAR}` or `${VAR:-default}`; a reference
   without a default fails config loading if the variable is unset.
 
 ## API specification (`api-spec.yaml`)
 
-A standard OpenAPI 3.0 document, where each operation carries an `x-temporal` list:
+A standard OpenAPI 3.0 document, where each operation carries an `x-temporal` object: a
+`triggers` list plus an optional `returnStrategy`:
 
 ```yaml
 paths:
@@ -153,14 +162,31 @@ paths:
                 orderId: { type: string }
                 customerId: { type: string }
       x-temporal:
-        - action: startWorkflow
-          namespace: default
-          workflowType: OrderWorkflow
-          workflowId: "order-{body.orderId}"
-          taskQueue: orders-task-queue
-          idReusePolicy: AllowDuplicate
-          workflowIdConflictPolicy: TerminateExisting
+        returnStrategy: acceptPartial   # optional, this is the default - see below
+        triggers:
+          - action: startWorkflow
+            namespace: default
+            workflowType: OrderWorkflow
+            workflowId: "order-{body.orderId}"
+            taskQueue: orders-task-queue
+            idReusePolicy: AllowDuplicate
+            workflowIdConflictPolicy: TerminateExisting
 ```
+
+### `returnStrategy`
+
+Governs how a multi-trigger operation's overall HTTP response is derived from its
+triggers' individual outcomes (a single-trigger operation always reports that trigger's
+own outcome directly, regardless of this setting):
+
+| Strategy                    | Behavior                                                                                          |
+|------------------------------|----------------------------------------------------------------------------------------------------|
+| `acceptPartial` (default)   | A genuine mix of outcomes (at least one trigger succeeded, at least one didn't) is reported as **207 Multi-Status**; a uniform outcome (all, or none) gets an ordinary single status code. |
+| `allOrNothing`               | Anything short of every trigger succeeding - a partial mix or a total failure - is reported as a single **409 Conflict**. |
+
+Every trigger is still dispatched and its individual result still appears in the
+response's `results` array either way; `returnStrategy` only changes the top-level status
+used to summarize them.
 
 ### Actions
 
@@ -173,11 +199,11 @@ paths:
 | `terminateWorkflow` | -                                    | Terminates immediately (body's `reason`, if any) |
 | `getResult`         | -                                    | Blocks until the workflow completes, returns its result |
 
-Every binding, regardless of action, requires `namespace` and `workflowId`.
+Every trigger, regardless of action, requires `namespace` and `workflowId`.
 
 ### `workflowId` templating
 
-Any `x-temporal` string field may reference incoming request data via
+Any `x-temporal.triggers` string field may reference incoming request data via
 `{origin.field}` placeholders:
 
 - `{path.orderId}` - a path parameter
@@ -190,7 +216,7 @@ Example: `"order-{path.orderId}-{body.customerId}"`.
 
 ### `startWorkflow` options
 
-A `startWorkflow` binding may set any of the Temporal SDK's `StartWorkflowOptions`:
+A `startWorkflow` trigger may set any of the Temporal SDK's `StartWorkflowOptions`:
 
 `workflowExecutionTimeout`, `workflowRunTimeout`, `workflowTaskTimeout` (durations like
 `30s`/`5m`/`24h`), `workflowIdConflictPolicy` (`Fail`, `UseExisting`,
@@ -218,13 +244,16 @@ gateway before it starts serving traffic.
 - The JSON body is validated against the operation's `requestBody` schema before
   dispatch; a failure returns **422** with a structured error naming every invalid
   field, not just the first.
-- A single-binding operation returns that binding's result directly, with the HTTP
+- A single-trigger operation returns that trigger's result directly, with the HTTP
   status matching its outcome (e.g. `202` for a fresh `startWorkflow`, `409` if it
   attached to an already-running execution instead).
-- A multi-binding operation returns a batch result: `200`/`202` if every binding
-  succeeded, a single failure status if none did, or **207 Multi-Status** for a genuine
-  mix of outcomes - each with a `status` field identifying which case it is
-  (`WORKFLOW_STARTED`, `WORKFLOW_NOT_STARTED`, `WORKFLOW_PARTIALLY_STARTED`).
+- A multi-trigger operation returns a batch result, each item with a `status` field
+  identifying its own outcome, plus a top-level `status` and HTTP code summarizing all of
+  them together, per `returnStrategy` (see [above](#returnstrategy)):
+  `WORKFLOW_STARTED` (`200`/`202`) if every trigger succeeded; otherwise, under
+  `acceptPartial`, `WORKFLOW_NOT_STARTED` (a single failure status) if none did, or
+  `WORKFLOW_PARTIALLY_STARTED` (**207 Multi-Status**) for a genuine mix; under
+  `allOrNothing`, `WORKFLOW_NOT_STARTED` (**409 Conflict**) for either case.
 
 ## CI/CD
 

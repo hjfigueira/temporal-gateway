@@ -8,6 +8,7 @@ import (
 
 func TestValidateRejectsBadDuration(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -20,6 +21,7 @@ func TestValidateRejectsBadDuration(t *testing.T) {
 
 func TestValidateRejectsUnknownConflictPolicy(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -32,6 +34,7 @@ func TestValidateRejectsUnknownConflictPolicy(t *testing.T) {
 
 func TestValidateRejectsCronAndStartDelayTogether(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -45,6 +48,7 @@ func TestValidateRejectsCronAndStartDelayTogether(t *testing.T) {
 
 func TestValidateAllowsTerminateIfRunningAlone(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           namespace: default
           workflowType: WidgetWorkflow
@@ -59,6 +63,7 @@ func TestValidateAllowsTerminateIfRunningAlone(t *testing.T) {
 
 func TestValidateRejectsTerminateIfRunningWithConflictPolicy(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -77,6 +82,7 @@ func TestValidateRejectsTerminateIfRunningWithConflictPolicy(t *testing.T) {
 
 func TestValidateRejectsUnknownSearchAttributeType(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -97,6 +103,7 @@ func TestValidateRejectsUnknownSearchAttributeType(t *testing.T) {
 
 func TestValidateRejectsSearchAttributeMissingName(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -131,6 +138,7 @@ func TestValidateRejectsSearchAttributeValueTypeMismatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			yamlContent := specHeader + fmt.Sprintf(`      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -149,6 +157,7 @@ func TestValidateRejectsSearchAttributeValueTypeMismatch(t *testing.T) {
 
 func TestValidateAcceptsValidSearchAttributes(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           namespace: default
           workflowType: WidgetWorkflow
@@ -184,6 +193,7 @@ func TestValidateAcceptsValidSearchAttributes(t *testing.T) {
 
 func TestValidateRejectsMissingTaskQueue(t *testing.T) {
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -201,6 +211,7 @@ func TestValidateReturnsAllErrorsAtOnce(t *testing.T) {
 	// Two independent problems on two different bindings: neither should
 	// mask the other.
 	yamlContent := specHeader + `      x-temporal:
+        triggers:
         - action: startWorkflow
           workflowType: WidgetWorkflow
           workflowId: "widget-1"
@@ -217,5 +228,56 @@ func TestValidateReturnsAllErrorsAtOnce(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing expected substring %q; validation should report every problem, not just the first", err.Error(), want)
 		}
+	}
+}
+
+func TestValidateAcceptsKnownReturnStrategies(t *testing.T) {
+	for _, strategy := range []string{"", "acceptPartial", "allOrNothing"} {
+		t.Run(strategy, func(t *testing.T) {
+			yamlContent := specHeader + fmt.Sprintf(`      x-temporal:
+        returnStrategy: %s
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`, strategy)
+			if _, err := loadSpec(t, yamlContent); err != nil {
+				t.Fatalf("expected no error for returnStrategy %q, got %v", strategy, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnknownReturnStrategy(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        returnStrategy: bogus
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for an unknown returnStrategy")
+	}
+	if !strings.Contains(err.Error(), "returnStrategy") {
+		t.Errorf("error %q does not mention returnStrategy", err.Error())
+	}
+}
+
+func TestValidateRejectsMissingTriggers(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        returnStrategy: acceptPartial
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for x-temporal with no triggers")
+	}
+	if !strings.Contains(err.Error(), "triggers") {
+		t.Errorf("error %q does not mention triggers", err.Error())
 	}
 }
