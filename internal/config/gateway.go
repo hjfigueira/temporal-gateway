@@ -20,42 +20,6 @@ type ServerConfig struct {
 	Port int    `yaml:"port"`
 }
 
-type TemporalTLSConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	CertPath string `yaml:"certPath,omitempty"`
-	KeyPath  string `yaml:"keyPath,omitempty"`
-}
-
-// WorkflowDefinition documents a workflow type the gateway addresses: its
-// default task queue (used when an x-temporal binding doesn't set its own
-// taskQueue) and, informationally, the signals/queries it exposes. It is not
-// cross-checked against the API spec's x-temporal bindings; an unknown
-// workflow, signal, or query surfaces as a Temporal error at request time.
-type WorkflowDefinition struct {
-	Name      string   `yaml:"name"`
-	TaskQueue string   `yaml:"taskQueue"`
-	Signals   []string `yaml:"signals,omitempty"`
-	Queries   []string `yaml:"queries,omitempty"`
-}
-
-// TemporalConnectionConfig is one Temporal namespace the gateway dials a
-// client for. The gateway can serve routes against several namespaces (even
-// on different clusters) at once - see internal/temporal.Connections; each
-// x-temporal binding in the API spec names which one it targets via its own
-// namespace field, which must match this Namespace.
-type TemporalConnectionConfig struct {
-	Namespace string               `yaml:"namespace"`
-	Host      string               `yaml:"host"`
-	TLS       TemporalTLSConfig    `yaml:"tls"`
-	Workflows []WorkflowDefinition `yaml:"workflows"`
-}
-
-// TemporalConfig lists every Temporal namespace connection the gateway
-// dials at startup.
-type TemporalConfig struct {
-	Connections []TemporalConnectionConfig `yaml:"connections"`
-}
-
 type APIKeyAuthConfig struct {
 	Header string   `yaml:"header"`
 	Keys   []string `yaml:"keys"`
@@ -109,35 +73,6 @@ type OTelConfig struct {
 	SampleRatio float64 `yaml:"sampleRatio"`
 }
 
-// APISpecPaths is one or more paths to API specification files. In YAML it
-// accepts either a single scalar ("apiSpec: ./api-spec.yaml") or a list
-// ("apiSpec: [./base.yaml, ./overrides.yaml]"), so existing single-file
-// configs keep working unchanged. When more than one path is given, the
-// gateway loads and merges them into a single API spec (see spec.Load) -
-// later files take precedence over earlier ones for any operation they both
-// define, so a later entry can override or extend a base spec.
-type APISpecPaths []string
-
-// UnmarshalYAML implements the scalar-or-list decoding described on
-// APISpecPaths.
-func (p *APISpecPaths) UnmarshalYAML(value *yaml.Node) error {
-	if value.Kind == yaml.ScalarNode {
-		var single string
-		if err := value.Decode(&single); err != nil {
-			return err
-		}
-		*p = APISpecPaths{single}
-		return nil
-	}
-
-	var list []string
-	if err := value.Decode(&list); err != nil {
-		return fmt.Errorf("apiSpec: must be a string or a list of strings: %w", err)
-	}
-	*p = list
-	return nil
-}
-
 // GatewayConfig is the root of the main configuration file. It links to one
 // or more API specifications (APISpec) that define the actual HTTP surface.
 type GatewayConfig struct {
@@ -175,8 +110,8 @@ func Load(path string) (*GatewayConfig, error) {
 		return nil, fmt.Errorf("config: parse %q: %w", absPath, err)
 	}
 
-	if len(cfg.APISpec) == 0 {
-		return nil, fmt.Errorf("config: %q: apiSpec is required", absPath)
+	if err := cfg.APISpec.validate(); err != nil {
+		return nil, fmt.Errorf("config: %q: %w", absPath, err)
 	}
 
 	if err := cfg.Temporal.validate(); err != nil {
@@ -185,28 +120,6 @@ func Load(path string) (*GatewayConfig, error) {
 
 	cfg.baseDir = filepath.Dir(absPath)
 	return &cfg, nil
-}
-
-// validate checks that temporal.connections declares at least one entry and
-// that every entry has a non-empty, unique namespace - the key
-// internal/temporal.Connections and each x-temporal binding's namespace
-// field resolve a connection by.
-func (c TemporalConfig) validate() error {
-	if len(c.Connections) == 0 {
-		return fmt.Errorf("temporal.connections requires at least one entry")
-	}
-
-	seen := make(map[string]bool, len(c.Connections))
-	for i, conn := range c.Connections {
-		if conn.Namespace == "" {
-			return fmt.Errorf("temporal.connections[%d]: missing namespace", i)
-		}
-		if seen[conn.Namespace] {
-			return fmt.Errorf("temporal.connections[%d]: duplicate namespace %q", i, conn.Namespace)
-		}
-		seen[conn.Namespace] = true
-	}
-	return nil
 }
 
 // ResolveSpecPaths returns the absolute paths to every configured API

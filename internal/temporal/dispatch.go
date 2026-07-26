@@ -19,10 +19,10 @@ func NewDispatcher(connections Connections) *Dispatcher {
 	return &Dispatcher{connections: connections}
 }
 
-// Dispatch runs binding's action against workflowID, using body (may be
-// nil) as the workflow/signal/query input where applicable, against the
-// Temporal connection named by binding.Namespace. It returns a
-// JSON-serializable result.
+// Dispatch resolves binding's namespace to a connection, then routes to the
+// method implementing binding.Action, passing along workflowID and body
+// (may be nil, used as the workflow/signal/query input where applicable).
+// It returns a JSON-serializable result.
 func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
 	conn, err := d.connections.resolve(binding.Namespace)
 	if err != nil {
@@ -33,43 +33,61 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 	case spec.ActionStartWorkflow:
 		return d.startWorkflow(ctx, conn, binding, workflowID, body)
 	case spec.ActionSignalWorkflow:
-		if err := conn.Client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
-			return nil, err
-		}
-		return response.WorkflowSignaled{
-			Envelope:   response.Envelope{Status: response.StatusSignaled},
-			WorkflowID: workflowID,
-			SignalName: binding.SignalName,
-		}, nil
+		return d.signalWorkflow(ctx, conn, binding, workflowID, body)
 	case spec.ActionQueryWorkflow:
 		return d.queryWorkflow(ctx, conn, binding, workflowID, body)
 	case spec.ActionCancelWorkflow:
-		if err := conn.Client.CancelWorkflow(ctx, workflowID, ""); err != nil {
-			return nil, err
-		}
-		return response.WorkflowAck{
-			Envelope:   response.Envelope{Status: response.StatusCancelled},
-			WorkflowID: workflowID,
-		}, nil
+		return d.cancelWorkflow(ctx, conn, workflowID)
 	case spec.ActionTerminateWorkflow:
-		reason, _ := body.(string)
-		if m, ok := body.(map[string]any); ok {
-			if r, ok := m["reason"].(string); ok {
-				reason = r
-			}
-		}
-		if err := conn.Client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
-			return nil, err
-		}
-		return response.WorkflowAck{
-			Envelope:   response.Envelope{Status: response.StatusTerminated},
-			WorkflowID: workflowID,
-		}, nil
+		return d.terminateWorkflow(ctx, conn, workflowID, body)
 	case spec.ActionGetResult:
 		return d.getResult(ctx, conn, workflowID)
 	default:
 		return nil, fmt.Errorf("unsupported temporal action %q", binding.Action)
 	}
+}
+
+// signalWorkflow sends binding.SignalName to workflowID, with body as the
+// signal's input.
+func (d *Dispatcher) signalWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+	if err := conn.Client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
+		return nil, err
+	}
+	return response.WorkflowSignaled{
+		Envelope:   response.Envelope{Status: response.StatusSignaled},
+		WorkflowID: workflowID,
+		SignalName: binding.SignalName,
+	}, nil
+}
+
+// cancelWorkflow requests cancellation of workflowID's current run.
+func (d *Dispatcher) cancelWorkflow(ctx context.Context, conn *Connection, workflowID string) (any, error) {
+	if err := conn.Client.CancelWorkflow(ctx, workflowID, ""); err != nil {
+		return nil, err
+	}
+	return response.WorkflowAck{
+		Envelope:   response.Envelope{Status: response.StatusCancelled},
+		WorkflowID: workflowID,
+	}, nil
+}
+
+// terminateWorkflow immediately terminates workflowID's current run. The
+// termination reason recorded against the run comes from body's "reason"
+// field, or from body itself when it's a plain string.
+func (d *Dispatcher) terminateWorkflow(ctx context.Context, conn *Connection, workflowID string, body any) (any, error) {
+	reason, _ := body.(string)
+	if m, ok := body.(map[string]any); ok {
+		if r, ok := m["reason"].(string); ok {
+			reason = r
+		}
+	}
+	if err := conn.Client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
+		return nil, err
+	}
+	return response.WorkflowAck{
+		Envelope:   response.Envelope{Status: response.StatusTerminated},
+		WorkflowID: workflowID,
+	}, nil
 }
 
 // queryWorkflow issues a Temporal query and returns its decoded result
