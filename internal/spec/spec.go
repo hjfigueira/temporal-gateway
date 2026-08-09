@@ -55,15 +55,67 @@ const (
 	ReturnStrategyAllOrNothing ReturnStrategy = "allOrNothing"
 )
 
+// Driver selects how an operation's x-temporal.triggers actually get
+// dispatched to Temporal - see TemporalSpec.DriverOrDefault.
+type Driver string
+
+const (
+	// DriverDirect is the default: every trigger is dispatched straight to
+	// Temporal, concurrently, exactly as if the caller had used the
+	// Temporal SDK itself (see internal/gateway.DirectDriver).
+	DriverDirect Driver = "direct"
+	// DriverNexus starts a single CascadeEvent workflow (named by Config)
+	// instead of dispatching the triggers directly; that workflow fans
+	// them out to their target namespaces over Nexus (see
+	// internal/temporal.CascadeEvent and internal/gateway.NexusDriver). The
+	// gateway's HTTP response then reports only the CascadeEvent
+	// workflow's own start outcome, not each trigger's - those happen
+	// asynchronously, inside the workflow.
+	DriverNexus Driver = "nexus"
+)
+
+// DefaultCascadeWorkflowType is the workflow type CascadeEvent is
+// registered under when a NexusConfig doesn't set its own WorkflowType.
+const DefaultCascadeWorkflowType = "CascadeEvent"
+
+// NexusConfig is the "x-temporal.config" object, meaningful only when
+// TemporalSpec.Driver is DriverNexus: the CascadeEvent workflow the gateway
+// starts in place of dispatching Triggers directly. Namespace and TaskQueue
+// name where that workflow runs - a worker the gateway itself hosts (see
+// internal/temporal.BuildNexusWorkers) must be polling that namespace/
+// taskQueue and have CascadeEvent registered under WorkflowTypeOrDefault().
+type NexusConfig struct {
+	Namespace    string `yaml:"namespace"`
+	TaskQueue    string `yaml:"taskQueue"`
+	WorkflowType string `yaml:"workflowType,omitempty"`
+	// WorkflowID may use the same "{origin.field}" templating as a
+	// trigger's own WorkflowID (see internal/gateway's renderTemplate).
+	WorkflowID string `yaml:"workflowId"`
+}
+
+// WorkflowTypeOrDefault returns c.WorkflowType, defaulting to
+// DefaultCascadeWorkflowType when it wasn't set in the spec.
+func (c NexusConfig) WorkflowTypeOrDefault() string {
+	if c.WorkflowType == "" {
+		return DefaultCascadeWorkflowType
+	}
+	return c.WorkflowType
+}
+
 // TemporalSpec is the "x-temporal" vendor extension attached to an
-// operation: the list of Temporal actions it dispatches to (Triggers) plus
-// how their outcomes combine into the operation's overall HTTP response
-// (ReturnStrategy).
+// operation: the list of Temporal actions it dispatches to (Triggers), how
+// their outcomes combine into the operation's overall HTTP response
+// (ReturnStrategy), and which Driver actually carries out that dispatch.
 type TemporalSpec struct {
 	// ReturnStrategy defaults to ReturnStrategyAcceptPartial when empty (see
 	// Strategy).
-	ReturnStrategy ReturnStrategy    `yaml:"returnStrategy,omitempty"`
-	Triggers       []TemporalBinding `yaml:"triggers"`
+	ReturnStrategy ReturnStrategy `yaml:"returnStrategy,omitempty"`
+	// Driver defaults to DriverDirect when empty (see DriverOrDefault).
+	Driver Driver `yaml:"driver,omitempty"`
+	// Config is only meaningful (and required) when Driver is DriverNexus -
+	// see NexusConfig.
+	Config   *NexusConfig      `yaml:"config,omitempty"`
+	Triggers []TemporalBinding `yaml:"triggers"`
 }
 
 // Strategy returns t.ReturnStrategy, defaulting to ReturnStrategyAcceptPartial
@@ -73,6 +125,15 @@ func (t TemporalSpec) Strategy() ReturnStrategy {
 		return ReturnStrategyAcceptPartial
 	}
 	return t.ReturnStrategy
+}
+
+// DriverOrDefault returns t.Driver, defaulting to DriverDirect when it
+// wasn't set in the spec.
+func (t TemporalSpec) DriverOrDefault() Driver {
+	if t.Driver == "" {
+		return DriverDirect
+	}
+	return t.Driver
 }
 
 // TemporalBinding is the "x-temporal" vendor extension attached to an

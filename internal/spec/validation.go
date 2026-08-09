@@ -50,6 +50,15 @@ var validReturnStrategies = map[ReturnStrategy]bool{
 	ReturnStrategyAllOrNothing:  true,
 }
 
+// validDrivers mirrors the TemporalSpec.Driver values internal/gateway
+// understands (see DirectDriver and NexusDriver). "" is valid - it means
+// DriverOrDefault() falls back to DriverDirect.
+var validDrivers = map[Driver]bool{
+	"":           true,
+	DriverDirect: true,
+	DriverNexus:  true,
+}
+
 // validate checks every operation's x-temporal bindings and returns a
 // single error joining every problem found (via errors.Error(), one per
 // line), rather than stopping at the first, so a misconfigured spec can be
@@ -64,6 +73,21 @@ func (s *Spec) validate() error {
 			}
 			if !validReturnStrategies[op.Temporal.ReturnStrategy] {
 				errs = append(errs, fmt.Errorf("%s %s: x-temporal: unknown returnStrategy %q", method, path, op.Temporal.ReturnStrategy))
+			}
+			if !validDrivers[op.Temporal.Driver] {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal: unknown driver %q", method, path, op.Temporal.Driver))
+			}
+			switch op.Temporal.DriverOrDefault() {
+			case DriverNexus:
+				if op.Temporal.Config == nil {
+					errs = append(errs, fmt.Errorf("%s %s: x-temporal: driver nexus requires config", method, path))
+				} else {
+					errs = append(errs, validateNexusConfig(method, path, op.Temporal.Config)...)
+				}
+			default:
+				if op.Temporal.Config != nil {
+					errs = append(errs, fmt.Errorf("%s %s: x-temporal: config is only valid when driver is nexus", method, path))
+				}
 			}
 			for i, t := range op.Temporal.Triggers {
 				errs = append(errs, validateBinding(method, path, i, t)...)
@@ -109,6 +133,23 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing workflowId", method, path, i))
 	}
 
+	return errs
+}
+
+// validateNexusConfig checks an x-temporal.config object against the rules
+// for DriverNexus: Namespace/TaskQueue/WorkflowID must all be set.
+// WorkflowType is optional - see NexusConfig.WorkflowTypeOrDefault.
+func validateNexusConfig(method, path string, cfg *NexusConfig) []error {
+	var errs []error
+	if cfg.Namespace == "" {
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.config: missing namespace", method, path))
+	}
+	if cfg.TaskQueue == "" {
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.config: missing taskQueue", method, path))
+	}
+	if cfg.WorkflowID == "" {
+		errs = append(errs, fmt.Errorf("%s %s: x-temporal.config: missing workflowId", method, path))
+	}
 	return errs
 }
 

@@ -1,39 +1,24 @@
-# Main gateway configuration. This file is the entry point loaded by the
-# temporal-gateway binary; it links to an API specification (apiSpec) that
-# describes the HTTP surface generated in front of Temporal.
-#
-# Any value here may reference an environment variable using shell-style
-# expansion, e.g. below "${GATEWAY_PORT:-8081}" substitutes the GATEWAY_PORT
-# env var, falling back to 8081 if it's unset. A reference without a
-# fallback fails config loading if the variable isn't set.
-
 server:
   host: "${GATEWAY_HOST:-0.0.0.0}"
   port: ${GATEWAY_PORT:-8081}
 
-# Every Temporal namespace the gateway dials a client for at startup. A
-# single gateway process can serve routes against several namespaces - even
-# different clusters - at once: each x-temporal binding in api-spec.yaml
-# names which one it targets via its own "namespace" field, which must
-# match one of these entries' namespace.
 temporal:
   connections:
     - namespace: "${TEMPORAL_NAMESPACE:-default}"
       host: "${TEMPORAL_HOST:-localhost:7233}"
       tls:
         enabled: false
+      nexusEndpoint: "${TEMPORAL_NEXUS_ENDPOINT:-gateway-default}"
     - namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-notifications}"
       host: "${TEMPORAL_NOTIFICATIONS_HOST:-localhost:7233}"
       tls:
         enabled: false
+      nexusEndpoint: "${TEMPORAL_NOTIFICATIONS_NEXUS_ENDPOINT:-gateway-notifications}"
+    - namespace: "${TEMPORAL_CASCADE_NAMESPACE:-cascade}"
+      host: "${TEMPORAL_CASCADE_HOST:-localhost:7233}"
+      tls:
+        enabled: false
 
-# OpenTelemetry distributed tracing. When enabled, the gateway starts one
-# span per HTTP request and exports it via OTLP/gRPC to endpoint; that
-# span's trace context is also propagated into the Temporal headers of
-# every workflow action the request dispatches, so a workflow's own
-# tracing (if instrumented) continues the same trace. Disabled by default
-# since it requires a reachable OTLP collector (e.g. the OpenTelemetry
-# Collector, Jaeger, or a vendor agent) at endpoint.
 otel:
   enabled: ${OTEL_ENABLED:-true}
   serviceName: "${OTEL_SERVICE_NAME:-temporal-gateway}"

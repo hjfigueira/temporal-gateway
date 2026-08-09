@@ -281,3 +281,130 @@ func TestValidateRejectsMissingTriggers(t *testing.T) {
 		t.Errorf("error %q does not mention triggers", err.Error())
 	}
 }
+
+func TestValidateAcceptsKnownDrivers(t *testing.T) {
+	for _, driver := range []string{"", "direct"} {
+		t.Run(driver, func(t *testing.T) {
+			yamlContent := specHeader + fmt.Sprintf(`      x-temporal:
+        driver: %s
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`, driver)
+			if _, err := loadSpec(t, yamlContent); err != nil {
+				t.Fatalf("expected no error for driver %q, got %v", driver, err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsUnknownDriver(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        driver: bogus
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for an unknown driver")
+	}
+	if !strings.Contains(err.Error(), "driver") {
+		t.Errorf("error %q does not mention driver", err.Error())
+	}
+}
+
+func TestValidateRejectsNexusDriverWithoutConfig(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        driver: nexus
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for driver nexus with no config")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error %q does not mention config", err.Error())
+	}
+}
+
+func TestValidateRejectsIncompleteNexusConfig(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        driver: nexus
+        config:
+          namespace: cascade
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for a config missing taskQueue/workflowId")
+	}
+	if !strings.Contains(err.Error(), "taskQueue") || !strings.Contains(err.Error(), "workflowId") {
+		t.Errorf("error %q does not mention both missing fields", err.Error())
+	}
+}
+
+func TestValidateRejectsConfigWithoutNexusDriver(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        config:
+          namespace: cascade
+          taskQueue: cascade-task-queue
+          workflowId: "cascade-1"
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for config set without driver: nexus")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error %q does not mention config", err.Error())
+	}
+}
+
+func TestValidateAcceptsCompleteNexusDriver(t *testing.T) {
+	yamlContent := specHeader + `      x-temporal:
+        driver: nexus
+        config:
+          namespace: cascade
+          taskQueue: cascade-task-queue
+          workflowId: "cascade-{body.orderId}"
+        triggers:
+        - action: startWorkflow
+          namespace: default
+          workflowType: WidgetWorkflow
+          workflowId: "widget-1"
+          taskQueue: widgets-task-queue
+`
+	spec, err := loadSpec(t, yamlContent)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	op := spec.Paths["/widgets"].Post
+	if op.Temporal.DriverOrDefault() != DriverNexus {
+		t.Fatalf("driver = %q, want %q", op.Temporal.DriverOrDefault(), DriverNexus)
+	}
+	if got := op.Temporal.Config.WorkflowTypeOrDefault(); got != DefaultCascadeWorkflowType {
+		t.Errorf("WorkflowTypeOrDefault() = %q, want %q", got, DefaultCascadeWorkflowType)
+	}
+}

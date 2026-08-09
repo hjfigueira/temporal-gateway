@@ -16,6 +16,10 @@ dispatches the calls - no handler code to write or maintain.
   into one HTTP response.
 - **Multi-namespace** - each `x-temporal.triggers` entry names which configured Temporal
   namespace (even a different cluster) it targets, so one gateway can front several.
+- **Pluggable dispatch drivers** - `x-temporal.driver` picks how an operation's triggers
+  reach Temporal: `direct` (dispatched straight to Temporal, the default) or `nexus` (a
+  single `CascadeEvent` workflow the gateway itself hosts, fanning them out over Nexus) -
+  see [`driver`](#driver) below.
 - **Templated workflow IDs** - `workflowId: "order-{path.orderId}-{body.customerId}"`,
   with `{origin.field}` placeholders (`path`, `body`, `query`, `header`) plus a
   `{uuidv7}` generator.
@@ -125,7 +129,9 @@ apiSpec: "./api-spec.yaml"
 - **`temporal.connections`** - one entry per Temporal namespace the gateway should dial.
   At least one is required, each `namespace` must be unique, and every
   `x-temporal.triggers` entry in the API spec must name a `namespace` present here
-  (checked at startup, not at request time).
+  (checked at startup, not at request time). `nexusEndpoint` and
+  `nexusDispatchTaskQueue` are only needed by namespaces a `driver: nexus` operation
+  touches - see [`driver`](#driver).
 - **`otel`** - when `enabled` (the default), the gateway starts one span per request and
   exports it via OTLP/gRPC to `endpoint`, propagating trace context into the dispatched
   workflow's Temporal headers. The gRPC connection is non-blocking, so a missing
@@ -238,6 +244,82 @@ searchAttributes:
 The whole spec is validated at startup - an invalid duration, unknown policy, type
 mismatch, or a namespace with no matching `temporal.connections` entry fails the
 gateway before it starts serving traffic.
+
+### `driver`
+
+Governs *how* an operation's `x-temporal.triggers` actually reach Temporal. `DirectDriver`
+and `NexusDriver` implement a common `Driver` interface (`internal/gateway`), so the two
+are fully interchangeable per operation - switch one for the other by editing `driver`
+alone, no code change.
+
+| Driver              | Behavior                                                                                     |
+|----------------------|-----------------------------------------------------------------------------------------------|
+| `direct` (default)  | Every trigger is dispatched straight to Temporal, concurrently - exactly as described above. |
+| `nexus`              | The gateway starts a single **CascadeEvent** workflow instead, passing `triggers` as its input; that workflow fans them out to their target namespaces over [Nexus](https://docs.temporal.io/nexus). |
+
+`nexus` requires a sibling `config` object naming the CascadeEvent workflow to start:
+
+```yaml
+x-temporal:
+  driver: nexus
+  config:
+    namespace: cascade                          # a temporal.connections entry
+    taskQueue: cascade-task-queue
+    workflowType: CascadeEvent                  # optional, this is the default
+    workflowId: "cascade-order-{body.orderId}"  # supports the same templating as triggers
+  triggers:
+    - action: startWorkflow
+      namespace: default
+      workflowType: OrderWorkflow
+      workflowId: "order-{body.orderId}"
+      taskQueue: orders-task-queue
+    - action: startWorkflow
+      namespace: notifications
+      workflowType: NotificationWorkflow
+      workflowId: "order-{body.orderId}-notification"
+      taskQueue: notifications-task-queue
+```
+
+What actually happens for a `nexus` request:
+
+1. The gateway renders each trigger's `workflowId` against the request (same templating as
+   `direct`), then starts the CascadeEvent workflow named by `config`, passing the
+   rendered triggers - plus the request body - as its input. **This is the only Temporal
+   call the HTTP request makes**; the response reports only this workflow's own start
+   outcome (e.g. `202`/`STARTED`), not each trigger's, since those happen asynchronously,
+   inside the workflow.
+2. CascadeEvent (a workflow the gateway itself hosts - see below) fans each trigger out
+   concurrently over Nexus to the namespace it targets, invoking a `Dispatch` Nexus
+   operation there. That operation hands off to the exact same dispatch logic the
+   `direct` driver uses in-process, so a trigger behaves identically either way - only how
+   the call arrives differs.
+
+**The gateway itself runs the Temporal workers this requires** - it's not a pure
+stateless HTTP↔Temporal translator once any operation uses `nexus`. At startup it
+inspects the loaded spec and, for every operation using `driver: nexus`, starts:
+
+- One worker per distinct `config.namespace`/`config.taskQueue`, hosting the
+  `CascadeEvent` workflow.
+- One worker per namespace targeted by a `nexus`-driver trigger, hosting the `Dispatch`
+  Nexus service that lets a CascadeEvent workflow reach it.
+
+This also means every namespace a `nexus`-driver trigger targets needs two things set up
+beyond what `direct` requires:
+
+- **`temporal.connections[].nexusEndpoint`** (config.yml) - the name of a [Nexus
+  endpoint](https://docs.temporal.io/nexus/endpoint) reaching that namespace. Nexus
+  endpoints are a server-side resource, provisioned separately (e.g. `temporal operator
+  nexus endpoint create --name gateway-default --target-namespace default
+  --target-task-queue temporal-gateway-nexus-dispatch`) - the gateway only references
+  them by name, and validates at startup that every namespace needing one has it
+  configured (fails fast, same as an unconfigured `namespace`).
+- **`temporal.connections[].nexusDispatchTaskQueue`** (optional) - the task queue that
+  namespace's `Dispatch` service worker polls; defaults to
+  `temporal-gateway-nexus-dispatch`. Whatever's actually in effect must match the target
+  task queue the Nexus endpoint above was provisioned with.
+
+A gateway spec that never uses `driver: nexus` never starts a worker or polls a task
+queue at all - this is entirely opt-in per operation.
 
 ## Request/response behavior
 

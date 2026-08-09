@@ -183,65 +183,76 @@ func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.Tem
 
 // collectResults turns each dispatch outcome into its response item and
 // HTTP status, logs it, and counts how many bindings actually succeeded
-// (see dispatchOutcome.succeeded).
+// (see resultItem).
 func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes []dispatchOutcome, logger *slog.Logger) (items []any, statuses []int, succeeded int) {
 	items = make([]any, len(outcomes))
 	statuses = make([]int, len(outcomes))
 
 	for i, outcome := range outcomes {
-		binding := bindings[i]
-
-		if outcome.err != nil {
-			respStatus, httpStatus, message := errorResponse(outcome.err)
-			statuses[i] = httpStatus
-			logger.Error("temporal dispatch failed",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"workflow_id", outcome.workflowID,
-				"workflow_type", binding.WorkflowType,
-				"error", outcome.err,
-			)
-			items[i] = response.Envelope{
-				Status:  respStatus,
-				Message: fmt.Sprintf("%s: %s", workflowLabel(binding, outcome.workflowID), message),
-			}
-			continue
-		}
-
-		items[i] = outcome.result
-		if outcome.succeeded() {
+		item, status, ok := resultItem(route, bindings[i], outcome.workflowID, outcome.result, outcome.err, logger)
+		items[i] = item
+		statuses[i] = status
+		if ok {
 			succeeded++
-			statuses[i] = statusByAction[binding.Action]
-			if statuses[i] == 0 {
-				statuses[i] = http.StatusOK
-			}
-			logger.Info("handled request",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"workflow_id", outcome.workflowID,
-			)
-			continue
-		}
-
-		// Dispatch returned no Go error, but the result itself reports a
-		// non-success outcome (e.g. startWorkflow attached to an
-		// already-existing run instead of creating one) - treat it the
-		// same as a failure for status-code and batch-accounting purposes.
-		statuses[i] = http.StatusConflict
-		if sg, ok := outcome.result.(statusGetter); ok {
-			logger.Info("temporal dispatch did not start a new run",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"workflow_id", outcome.workflowID,
-				"status", sg.GetStatus(),
-			)
 		}
 	}
 
 	return items, statuses, succeeded
+}
+
+// resultItem turns a single dispatch outcome (workflowID/result/err, as
+// held by dispatchOutcome) into its response item and HTTP status, logs it,
+// and reports whether it actually succeeded (see dispatchOutcome.succeeded).
+// Shared by collectResults, which calls it once per trigger for the direct
+// driver, and NexusDriver's handler, which calls it once for the
+// CascadeEvent workflow's own start outcome.
+func resultItem(route spec.Route, binding spec.TemporalBinding, workflowID string, result any, err error, logger *slog.Logger) (item any, status int, succeeded bool) {
+	outcome := dispatchOutcome{workflowID: workflowID, result: result, err: err}
+
+	if outcome.err != nil {
+		respStatus, httpStatus, message := errorResponse(outcome.err)
+		logger.Error("temporal dispatch failed",
+			"operation_id", route.Operation.OperationID,
+			"method", route.Method,
+			"path", route.Path,
+			"workflow_id", workflowID,
+			"workflow_type", binding.WorkflowType,
+			"error", outcome.err,
+		)
+		return response.Envelope{
+			Status:  respStatus,
+			Message: fmt.Sprintf("%s: %s", workflowLabel(binding, workflowID), message),
+		}, httpStatus, false
+	}
+
+	if outcome.succeeded() {
+		httpStatus := statusByAction[binding.Action]
+		if httpStatus == 0 {
+			httpStatus = http.StatusOK
+		}
+		logger.Info("handled request",
+			"operation_id", route.Operation.OperationID,
+			"method", route.Method,
+			"path", route.Path,
+			"workflow_id", workflowID,
+		)
+		return outcome.result, httpStatus, true
+	}
+
+	// Dispatch returned no Go error, but the result itself reports a
+	// non-success outcome (e.g. startWorkflow attached to an
+	// already-existing run instead of creating one) - treat it the same as
+	// a failure for status-code and batch-accounting purposes.
+	if sg, ok := outcome.result.(statusGetter); ok {
+		logger.Info("temporal dispatch did not start a new run",
+			"operation_id", route.Operation.OperationID,
+			"method", route.Method,
+			"path", route.Path,
+			"workflow_id", workflowID,
+			"status", sg.GetStatus(),
+		)
+	}
+	return outcome.result, http.StatusConflict, false
 }
 
 // writeBatchResult picks the top-level response.BatchResult status and HTTP

@@ -20,6 +20,14 @@ type WorkflowDefinition struct {
 	Queries   []string `yaml:"queries,omitempty"`
 }
 
+// DefaultNexusDispatchTaskQueue is the task queue a namespace's Dispatch
+// Nexus service worker polls (see internal/temporal.BuildNexusWorkers) when
+// TemporalConnectionConfig.NexusDispatchTaskQueue isn't set. Whatever value
+// is actually in effect must match the target task queue a Nexus endpoint
+// reaching this namespace was provisioned with (endpoints are a
+// server-side resource - see the "nexus" driver docs in README.md).
+const DefaultNexusDispatchTaskQueue = "temporal-gateway-nexus-dispatch"
+
 // TemporalConnectionConfig is one Temporal namespace the gateway dials a
 // client for. The gateway can serve routes against several namespaces (even
 // on different clusters) at once - see internal/temporal.Connections; each
@@ -30,6 +38,25 @@ type TemporalConnectionConfig struct {
 	Host      string               `yaml:"host"`
 	TLS       TemporalTLSConfig    `yaml:"tls"`
 	Workflows []WorkflowDefinition `yaml:"workflows"`
+	// NexusEndpoint names the Temporal Nexus endpoint (a server-side
+	// resource, provisioned separately - e.g. via `temporal operator nexus
+	// endpoint create`) that reaches this namespace. Required on every
+	// namespace an x-temporal.triggers entry targets when its operation
+	// uses the "nexus" driver (see internal/temporal.ValidateNexusConfig);
+	// unused otherwise.
+	NexusEndpoint string `yaml:"nexusEndpoint,omitempty"`
+	// NexusDispatchTaskQueue is the task queue this namespace's Dispatch
+	// Nexus service worker polls - see DispatchTaskQueue.
+	NexusDispatchTaskQueue string `yaml:"nexusDispatchTaskQueue,omitempty"`
+}
+
+// DispatchTaskQueue returns c.NexusDispatchTaskQueue, defaulting to
+// DefaultNexusDispatchTaskQueue when it wasn't set.
+func (c TemporalConnectionConfig) DispatchTaskQueue() string {
+	if c.NexusDispatchTaskQueue == "" {
+		return DefaultNexusDispatchTaskQueue
+	}
+	return c.NexusDispatchTaskQueue
 }
 
 // TemporalConfig lists every Temporal namespace connection the gateway

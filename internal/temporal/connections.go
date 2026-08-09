@@ -15,6 +15,13 @@ import (
 type Connection struct {
 	Client  client.Client
 	Catalog *Catalog
+	// NexusEndpoint mirrors config.TemporalConnectionConfig.NexusEndpoint -
+	// empty when this namespace isn't reachable via Nexus.
+	NexusEndpoint string
+	// DispatchTaskQueue mirrors config.TemporalConnectionConfig.
+	// DispatchTaskQueue(): the task queue this namespace's Dispatch Nexus
+	// service worker polls (see BuildNexusWorkers), already defaulted.
+	DispatchTaskQueue string
 }
 
 // Connections is the temporalConnection dictionary: every Temporal
@@ -37,7 +44,12 @@ func NewConnections(cfg config.TemporalConfig) (Connections, error) {
 		if err != nil {
 			return conns, fmt.Errorf("temporal: namespace %q: %w", c.Namespace, err)
 		}
-		conns[c.Namespace] = &Connection{Client: cl, Catalog: NewCatalog(c.Workflows)}
+		conns[c.Namespace] = &Connection{
+			Client:            cl,
+			Catalog:           NewCatalog(c.Workflows),
+			NexusEndpoint:     c.NexusEndpoint,
+			DispatchTaskQueue: c.DispatchTaskQueue(),
+		}
 	}
 	return conns, nil
 }
@@ -52,6 +64,21 @@ func (c Connections) resolve(namespace string) (*Connection, error) {
 		return nil, fmt.Errorf("temporal: no connection configured for namespace %q", namespace)
 	}
 	return conn, nil
+}
+
+// NexusEndpoints returns the configured Nexus endpoint name for every
+// namespace that has one (config.TemporalConnectionConfig.NexusEndpoint),
+// keyed by namespace - used by the "nexus" driver (see
+// internal/gateway.NexusDriver) to resolve which endpoint reaches a given
+// trigger's target namespace.
+func (c Connections) NexusEndpoints() map[string]string {
+	endpoints := make(map[string]string, len(c))
+	for namespace, conn := range c {
+		if conn.NexusEndpoint != "" {
+			endpoints[namespace] = conn.NexusEndpoint
+		}
+	}
+	return endpoints
 }
 
 // Close closes every dialed client.
@@ -73,6 +100,45 @@ func ValidateNamespaces(apiSpec *spec.Spec, conns Connections) error {
 		for i, binding := range route.Operation.Temporal.Triggers {
 			if _, ok := conns[binding.Namespace]; !ok {
 				errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: namespace %q has no temporal.connections entry in config", route.Method, route.Path, i, binding.Namespace))
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ValidateNexusConfig checks every operation using x-temporal.driver: nexus
+// against conns: its x-temporal.config.namespace must resolve to a
+// configured connection, and every one of its triggers' own namespace must
+// have a config.TemporalConnectionConfig.NexusEndpoint configured, since
+// that's how the CascadeEvent workflow this driver starts (see
+// CascadeEvent) reaches it. Called once at startup alongside
+// ValidateNamespaces, for the same reason: fail before serving traffic
+// rather than on the first request that hits the route.
+func ValidateNexusConfig(apiSpec *spec.Spec, conns Connections) error {
+	var errs []error
+	for _, route := range apiSpec.Routes() {
+		t := route.Operation.Temporal
+		if t.DriverOrDefault() != spec.DriverNexus {
+			continue
+		}
+
+		if t.Config == nil {
+			// Already reported by spec.Spec.validate (driver nexus
+			// requires config) - nothing more to check here.
+			continue
+		}
+
+		if _, ok := conns[t.Config.Namespace]; !ok {
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.config: namespace %q has no temporal.connections entry in config", route.Method, route.Path, t.Config.Namespace))
+		}
+
+		for i, trigger := range t.Triggers {
+			conn, ok := conns[trigger.Namespace]
+			if !ok {
+				continue // already reported by ValidateNamespaces
+			}
+			if conn.NexusEndpoint == "" {
+				errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: namespace %q has no nexusEndpoint configured in temporal.connections, required for the nexus driver", route.Method, route.Path, i, trigger.Namespace))
 			}
 		}
 	}

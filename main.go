@@ -93,14 +93,34 @@ func run(logger *slog.Logger) error {
 	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
 		return fmt.Errorf("api spec references unknown temporal namespace: %w", err)
 	}
+	if err := temporal.ValidateNexusConfig(apiSpec, connections); err != nil {
+		return fmt.Errorf("api spec nexus driver configuration: %w", err)
+	}
+
+	dispatcher := temporal.NewDispatcher(connections)
+
+	// nexusWorkers hosts the CascadeEvent workflow and Dispatch Nexus
+	// service any x-temporal.driver: nexus operations need (see
+	// temporal.BuildNexusWorkers) - empty when the spec only uses the
+	// direct driver, so nothing extra polls Temporal in that case.
+	nexusWorkers, err := temporal.BuildNexusWorkers(apiSpec, connections, dispatcher)
+	if err != nil {
+		return fmt.Errorf("build nexus driver workers: %w", err)
+	}
 
 	if flags.dryRun {
 		logger.Info("dry run: config, api spec, and temporal connections are all valid; exiting without starting the server")
 		return nil
 	}
 
-	dispatcher := temporal.NewDispatcher(connections)
-	handler := gateway.NewHandler(apiSpec, dispatcher, logger)
+	if err := nexusWorkers.Start(); err != nil {
+		return fmt.Errorf("start nexus driver workers: %w", err)
+	}
+	defer nexusWorkers.Stop()
+
+	direct := gateway.DirectDriver{Dispatcher: dispatcher}
+	nexus := gateway.NexusDriver{Dispatcher: dispatcher, NexusEndpoints: connections.NexusEndpoints()}
+	handler := gateway.NewHandler(apiSpec, direct, nexus, logger)
 	server := newServer(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), handler)
 	defer func(server *http.Server) {
 		err := server.Close()
@@ -168,6 +188,7 @@ func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg 
 			"method", route.Method,
 			"path", route.Path,
 			"operation_id", route.Operation.OperationID,
+			"driver", route.Operation.Temporal.DriverOrDefault(),
 			"return_strategy", route.Operation.Temporal.Strategy(),
 			"temporal_actions", actions,
 			"temporal_namespaces", bindingNamespaces,

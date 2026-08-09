@@ -2,44 +2,6 @@ openapi: 3.0.3
 info:
   title: Order Service Gateway
   version: "1.0.0"
-  description: >
-    Sample API specification for temporal-gateway. Every operation carries an
-    x-temporal object with a triggers list describing how the HTTP call is
-    translated into one or more Temporal actions - most operations trigger a
-    single action, but a call can dispatch to several workflows by listing
-    more than one trigger. Every trigger requires a namespace, naming which
-    of config.yml's temporal.connections entries it dispatches against -
-    different triggers (even on the same operation) may target different
-    namespaces, letting one gateway serve routes across several Temporal
-    namespaces or clusters. x-temporal also takes a sibling returnStrategy,
-    which governs how a multi-trigger operation's overall HTTP response is
-    derived from its triggers' individual outcomes: "acceptPartial" (the
-    default) reports a genuine mix of outcomes as 207 Multi-Status, while
-    "allOrNothing" rejects the whole call with 409 Conflict unless every
-    trigger completed. workflowId (and other x-temporal string fields) may
-    reference request data via "{origin.field}" placeholders, where origin is
-    one of path, body, query, or header (e.g.
-    "order-{path.orderId}-{body.customerId}"), plus the reserved "{uuidv7}"
-    keyword to generate a fresh UUIDv7. Any value in this file may also
-    reference an environment variable using shell-style expansion, e.g. below
-    "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}" substitutes the
-    NOTIFICATIONS_TASK_QUEUE env var, falling back to
-    notifications-task-queue if it's unset. A reference without a fallback
-    fails spec loading if the variable isn't set. A startWorkflow trigger may
-    also set any of go.temporal.io/sdk/client's StartWorkflowOptions:
-    workflowExecutionTimeout, workflowRunTimeout, workflowTaskTimeout (all
-    durations like "30s"/"5m"/"24h"), workflowIdConflictPolicy (Fail,
-    UseExisting, or TerminateExisting), workflowExecutionErrorWhenAlreadyStarted,
-    retryPolicy (initialInterval, backoffCoefficient, maximumInterval,
-    maximumAttempts, nonRetryableErrorTypes), cronSchedule, startDelay
-    (mutually exclusive with cronSchedule), memo, enableEagerStart,
-    staticSummary, staticDetails, priority (priorityKey, fairnessKey,
-    fairnessWeight), and searchAttributes - a list of typed attributes, each
-    "{name, type, value}" where type is one of string, keyword, bool, int,
-    float, time (an RFC3339 string), or keywordList (a list of strings).
-    This file is referenced by the main gateway config (see config.yml ->
-    apiSpec).
-
 paths:
   /orders:
     post:
@@ -100,6 +62,52 @@ paths:
       responses:
         "202":
           description: Order and notification workflows started.
+
+  /orders/{orderId}/cascade:
+    post:
+      operationId: createOrderViaCascade
+      summary: >-
+        Same as POST /orders, but dispatched via the "nexus" driver instead
+        of "direct": the gateway starts a single CascadeEvent workflow (in
+        the "cascade" namespace/taskQueue below) rather than starting
+        OrderWorkflow/NotificationWorkflow itself; CascadeEvent fans them
+        out over Nexus. See the "nexus driver" section of README.md - the
+        default/notifications namespaces' nexusEndpoint (config.yml) must
+        name a Nexus endpoint actually provisioned on the server for this
+        to reach them; the HTTP response only reports the CascadeEvent
+        workflow's own start outcome, not each trigger's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ orderId, customerId ]
+              properties:
+                orderId:
+                  type: string
+                customerId:
+                  type: string
+      x-temporal:
+        driver: nexus
+        config:
+          namespace: "${TEMPORAL_CASCADE_NAMESPACE:-cascade}"
+          taskQueue: "${CASCADE_TASK_QUEUE:-cascade-task-queue}"
+          workflowId: "cascade-order-{body.orderId}"
+        triggers:
+          - action: startWorkflow
+            namespace: "${TEMPORAL_NAMESPACE:-default}"
+            workflowType: OrderWorkflow
+            workflowId: "order-{body.orderId}-cascade"No
+            taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
+          - action: startWorkflow
+            namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-notifications}"
+            workflowType: NotificationWorkflow
+            workflowId: "order-{body.orderId}-cascade-notification"
+            taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
+      responses:
+        "202":
+          description: CascadeEvent workflow started; the order/notification workflows it fans out to dispatch asynchronously via Nexus.
 
   /orders/{orderId}:
     get:
