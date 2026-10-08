@@ -55,16 +55,19 @@ const (
 // IsError reports whether status represents a failed outcome, or a success
 // that didn't do what was asked (e.g. a startWorkflow binding that
 // attached to an already-existing run instead of creating a new one).
+//
+// This lists the known-good statuses and defaults to true for anything
+// else, rather than the other way around: a new Status constant that's
+// never added here should read as an error until proven otherwise, not
+// silently pass as success. Listing the (shorter, fixed) set of genuine
+// successes also means this never needs editing when a new *failure*
+// status is introduced.
 func (s Status) IsError() bool {
 	switch s {
-	case StatusWorkflowPartiallyStarted, StatusWorkflowNotStarted,
-		StatusWorkflowRunning, StatusWorkflowCompleted, StatusWorkflowFailed,
-		StatusWorkflowCancelled, StatusWorkflowTerminated, StatusWorkflowTimedOut,
-		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
-		StatusInvalidRequest, StatusValidationFailed, StatusFailed:
-		return true
-	default:
+	case StatusValid, StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated:
 		return false
+	default:
+		return true
 	}
 }
 

@@ -22,8 +22,7 @@ Feature: startWorkflow semantics and options
 
   Scenario: Attaching to an already-running execution reports its real state
     Given a workflow with this workflowId is already RUNNING
-    And the configured idReusePolicy/workflowIdConflictPolicy allows attaching
-      instead of erroring
+    And the configured idReusePolicy/workflowIdConflictPolicy allows attaching instead of erroring
     When startWorkflow dispatches
     Then ExecuteWorkflow returns successfully with the existing RunID
     And the response status is "WORKFLOW_RUNNING", not "STARTED"

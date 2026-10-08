@@ -9,8 +9,7 @@ Feature: Response envelope and HTTP server hardening
   clients and shuts down gracefully, draining in-flight requests.
 
   Scenario: Every response type embeds Envelope
-    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled,
-      WorkflowAck, BatchResult, validate.Result)
+    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled, WorkflowAck, BatchResult, validate.Result)
     When its JSON is inspected
     Then it includes a top-level "status" field
     And an optional "message" field
@@ -31,8 +30,7 @@ Feature: Response envelope and HTTP server hardening
   Scenario: Slow clients cannot hold a connection open indefinitely
     Given a client that sends request headers very slowly
     When it connects to the gateway
-    Then the connection is closed after ReadHeaderTimeout (10s) if headers
-      are not fully received by then
+    Then the connection is closed after ReadHeaderTimeout (10s) if headers are not fully received by then
 
   Scenario: Idle keep-alive connections are closed after IdleTimeout
     Given a keep-alive connection that goes quiet
@@ -53,10 +51,8 @@ Feature: Response envelope and HTTP server hardening
     And the shutdown proceeds (does not wait indefinitely)
 
   Scenario: Every fallible startup stage returns an error instead of exiting directly
-    Given any of: dotenv.Load, config.Load, telemetry.Setup, spec.Load,
-      temporal.NewConnections, temporal.ValidateNamespaces fails
+    Given any of: dotenv.Load, config.Load, telemetry.Setup, spec.Load, temporal.NewConnections, temporal.ValidateNamespaces fails
     When run() executes
     Then it returns an error immediately, propagated up to main()
-    And deferred cleanup (closing Temporal connections, flushing telemetry)
-      still runs before the process exits
+    And deferred cleanup (closing Temporal connections, flushing telemetry) still runs before the process exits
     And os.Exit is called exactly once, in main, after run() has fully unwound

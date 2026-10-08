@@ -11,7 +11,12 @@ is built the way it is, and *what* each feature is supposed to do.
 - **[`features/`](features/)** — one Gherkin `.feature` file per feature
   area, describing expected behavior as concrete scenarios. Each file
   starts with a comment pointing back at the relevant `adr/*.md` files and
-  the primary Go source files that implement it.
+  the primary Go source files that implement it. A subset of these files
+  is actually *executed* against the real gateway code via
+  [godog](https://github.com/cucumber/godog) - see
+  [`bdd/`](../bdd/) at the repo root and
+  [`features/README.md`](features/README.md)'s automation-status table for
+  exactly which ones, and run them with `go test ./bdd/...`.
 
 | Feature file | Covers |
 |---|---|
@@ -48,11 +53,15 @@ is built the way it is, and *what* each feature is supposed to do.
    `.feature` file gets its own, following the existing format (a header
    comment linking to the relevant `adr/*.md` files + source files, then
    `Feature:` / `Scenario:` blocks), and an entry added to the table above.
-5. **This is documentation, not executable tests.** Nothing here runs `go
-   test` — these are specifications for humans and agents to read before
-   changing behavior. Go tests under `internal/*/*_test.go` remain the
-   actual correctness check; a `.feature` file describes *intent*, the Go
-   tests verify it.
+5. **Some of these are executable, most are still documentation.** The
+   files listed in `bdd/bdd_test.go`'s `featurePaths` run for real via
+   `go test ./bdd/...` (see [`features/README.md`](features/README.md) for
+   which, and how to add more); a failing scenario there means the gateway
+   stopped matching its own spec. The rest remain specifications for
+   humans and agents to read before changing behavior - not yet proven
+   against the code, and not a substitute for the correctness tests under
+   `internal/*/*_test.go` either way. A `.feature` file describes *intent*;
+   whether it's also *checked* depends on whether it's wired up.
 
 See the repo-root `CLAUDE.md` for the standing instruction every agent
 working in this repo is expected to follow.

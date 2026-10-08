@@ -271,8 +271,27 @@ gateway before it starts serving traffic.
 go build ./...
 go vet ./...
 gofmt -s -l .
-go test -race ./...
+go test -race ./...     # unit tests, plus the bdd/ BDD suite below
 ```
+
+### BDD / acceptance suite
+
+`bdd/` is a [godog](https://github.com/cucumber/godog) (Cucumber for Go)
+suite that runs directly against the Gherkin specs in
+[`.specs/features/`](.specs/features/) - the same `.feature` files that
+document the project's behavior are, for a growing subset of them, also
+executed as real acceptance tests:
+
+```bash
+go test ./bdd/...        # part of go test -race ./... too
+go test ./bdd/... -v     # Cucumber-style pretty output per scenario
+```
+
+It drives the gateway only through its exported API
+(`gateway.NewHandler`, `spec.Load`, ...) over real `net/http/httptest`
+requests - a black-box suite, not a white-box unit test. See
+[`.specs/features/README.md`](.specs/features/README.md) for exactly which
+`.feature` files are wired up today and how to add more.
 
 ### Project layout
 
@@ -287,6 +306,7 @@ internal/response    response envelope + status types
 internal/telemetry   OpenTelemetry setup
 internal/envsubst    ${VAR}/${VAR:-default} expansion
 internal/dotenv      .env file loading
+bdd                  godog (BDD) suite executing .specs/features/*.feature
 ```
 
 ## License

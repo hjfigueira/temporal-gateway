@@ -34,7 +34,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     Given "${GATEWAY_PORT:-8081}" appears as a bare (unquoted) YAML scalar
     When the file is loaded
     Then the substitution happens first, then the result is parsed as YAML
-    So the substituted text must itself be valid YAML for that field's type
+    # So the substituted text must itself be valid YAML for that field's type.
 
   Scenario: .env supplies defaults only for variables not already set
     Given a .env file sets ORDERS_TASK_QUEUE=from-dotenv
@@ -71,8 +71,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     Given config.yml lives in /etc/gateway/config.yml
     And apiSpec: "./api-spec.yaml"
     When paths are resolved
-    Then the resolved path is /etc/gateway/api-spec.yaml
-    Regardless of the process's current working directory
+    Then the resolved path is /etc/gateway/api-spec.yaml regardless of the process's current working directory
 
   Scenario: --dry-run validates everything and exits without serving
     Given a config.yml and api-spec.yaml that are both fully valid

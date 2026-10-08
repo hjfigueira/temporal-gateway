@@ -16,14 +16,20 @@ entirely by an OpenAPI 3.0 spec (`api-spec.yaml`) plus a gateway config
 - **`.specs/features/*.feature`** — Gherkin specs of expected behavior, one
   file per feature area (see `.specs/README.md` for the index). These
   describe *what the feature is supposed to do*, independent of the current
-  implementation.
+  implementation. Some of them are wired up to the `bdd/` godog suite and
+  actually run via `go test ./bdd/...` — see
+  `.specs/features/README.md`'s automation-status table for which, and
+  check that table before assuming a `.feature` file is "just docs".
 
 **When your change adds a feature, changes behavior, or revises a past
 decision:**
 
 1. Update (or add) the matching `.specs/features/*.feature` scenarios in
    the same change — a behavior change that isn't reflected there isn't
-   finished.
+   finished. If that file is one of the ones wired up to `bdd/` (see
+   `.specs/features/README.md`), also update its step definitions under
+   `bdd/steps_*_test.go` and run `go test ./bdd/...` — a passing BDD suite
+   against a stale spec is a false signal.
 2. Add a new `.specs/adr/000N-slug.md` file (and index row) if the change
    introduces a new design decision, or changes the reasoning behind an
    existing one. If it supersedes an earlier decision, add `**Superseded by
@@ -52,6 +58,7 @@ internal/response    response envelope + status types
 internal/telemetry   OpenTelemetry setup
 internal/envsubst    ${VAR}/${VAR:-default} expansion
 internal/dotenv      .env file loading
+bdd                  godog (BDD) suite executing .specs/features/*.feature
 ```
 
 ## Development commands
@@ -60,5 +67,6 @@ internal/dotenv      .env file loading
 go build ./...
 go vet ./...
 gofmt -s -l .
-go test -race ./...
+go test -race ./...       # unit tests + the bdd/ suite (it's an ordinary Go package)
+go test ./bdd/... -v      # just the BDD suite, with Cucumber-style output
 ```

@@ -46,10 +46,16 @@ Feature: Multi-trigger dispatch and returnStrategy
     Then the top-level status is "<status>"
     And the HTTP status is <http_status>
 
+    # http_status for the "0 succeeded" row is whatever the first trigger's
+    # own failure maps to (see errorResponse) - here a plain dispatch error,
+    # which falls through to 502 Bad Gateway. It is NOT a fixed property of
+    # "0 succeeded" in general; a different first-trigger failure (e.g. a
+    # NotFound) would carry a different code - only the *mechanism* (first
+    # item's own status) is fixed.
     Examples:
       | succeeded | total | status                      | http_status |
       | 2         | 2     | WORKFLOW_STARTED             | 202         |
-      | 0         | 2     | WORKFLOW_NOT_STARTED         | (first item's own failure status) |
+      | 0         | 2     | WORKFLOW_NOT_STARTED         | 502         |
       | 1         | 2     | WORKFLOW_PARTIALLY_STARTED   | 207         |
 
   Scenario Outline: allOrNothing status by outcome mix
@@ -69,11 +75,10 @@ Feature: Multi-trigger dispatch and returnStrategy
     When the operation is dispatched
     Then the response's "results" array has one item per trigger
     And each item identifies which workflow/action it is about
-    So the caller can tell exactly which trigger(s) succeeded or failed
-    Regardless of which single top-level status/HTTP code was chosen
+    # So the caller can tell exactly which trigger(s) succeeded or failed,
+    # regardless of which single top-level status/HTTP code was chosen.
 
   Scenario: Unknown returnStrategy value fails spec validation
-    Given x-temporal.returnStrategy is set to a value other than
-      "acceptPartial" or "allOrNothing" (and not empty)
+    Given x-temporal.returnStrategy is set to a value other than "acceptPartial" or "allOrNothing" (and not empty)
     When the spec is loaded
     Then spec loading fails before the server starts

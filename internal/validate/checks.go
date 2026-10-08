@@ -3,6 +3,8 @@ package validate
 import (
 	"fmt"
 	"regexp"
+
+	"temporal-gateway/internal/numeric"
 )
 
 // typeMatches reports whether data is a JSON value of the schema type named
@@ -108,10 +110,10 @@ func checkString(schema map[string]any, value string, path string, out *[]violat
 // number value.
 func checkNumber(schema map[string]any, value float64, path string, out *[]violation) {
 	label := displayField(path)
-	if minVal, ok := toFloat(schema["minimum"]); ok && value < minVal {
+	if minVal, ok := numeric.ToFloat64(schema["minimum"]); ok && value < minVal {
 		*out = append(*out, violation{path, msgMin(label, minVal)})
 	}
-	if maxVal, ok := toFloat(schema["maximum"]); ok && value > maxVal {
+	if maxVal, ok := numeric.ToFloat64(schema["maximum"]); ok && value > maxVal {
 		*out = append(*out, violation{path, msgMax(label, maxVal)})
 	}
 }

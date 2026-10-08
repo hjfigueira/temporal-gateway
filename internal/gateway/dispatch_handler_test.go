@@ -108,6 +108,27 @@ func allOrNothingRoute() spec.Route {
 	return route
 }
 
+// batchResponse is the subset of response.BatchResult's JSON shape the
+// tests below assert on.
+type batchResponse struct {
+	Status  string           `json:"status"`
+	Message string           `json:"message"`
+	Results []map[string]any `json:"results"`
+}
+
+// decodeBatch unmarshals rec's body as a batchResponse, failing the test
+// immediately if it isn't valid JSON. Centralizing this (every batch test
+// was otherwise repeating the same unmarshal-and-check) means a decode
+// failure is always reported the same way, with the same diagnostic.
+func decodeBatch(t *testing.T, rec *httptest.ResponseRecorder) batchResponse {
+	t.Helper()
+	var batch batchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
+		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
+	}
+	return batch
+}
+
 func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
@@ -128,13 +149,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 			}
 		}
 
-		var batch struct {
-			Status  string           `json:"status"`
-			Results []map[string]any `json:"results"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-			t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-		}
+		batch := decodeBatch(t, rec)
 		if batch.Status != string(response.StatusWorkflowStarted) {
 			t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowStarted)
 		}
@@ -164,14 +179,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 			t.Error("expected the second binding to still be dispatched even though the first failed")
 		}
 
-		var batch struct {
-			Status  string           `json:"status"`
-			Message string           `json:"message"`
-			Results []map[string]any `json:"results"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-			t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-		}
+		batch := decodeBatch(t, rec)
 		if batch.Status != string(response.StatusWorkflowPartiallyStarted) {
 			t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowPartiallyStarted)
 		}
@@ -208,14 +216,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 			t.Error("expected the first binding to still be dispatched even though the second failed")
 		}
 
-		var batch struct {
-			Status  string           `json:"status"`
-			Message string           `json:"message"`
-			Results []map[string]any `json:"results"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-			t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-		}
+		batch := decodeBatch(t, rec)
 		if batch.Status != string(response.StatusWorkflowPartiallyStarted) {
 			t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowPartiallyStarted)
 		}
@@ -254,13 +255,7 @@ func TestDispatchHandlerNoBindingsStartedIsNotMultiStatus(t *testing.T) {
 		t.Fatalf("status = %d, want anything but %d since nothing started", rec.Code, http.StatusMultiStatus)
 	}
 
-	var batch struct {
-		Status  string           `json:"status"`
-		Results []map[string]any `json:"results"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-	}
+	batch := decodeBatch(t, rec)
 	if batch.Status != string(response.StatusWorkflowNotStarted) {
 		t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowNotStarted)
 	}
@@ -313,13 +308,7 @@ func TestDispatchHandlerAttachingToExistingRunIsNotStarted(t *testing.T) {
 			t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusMultiStatus, rec.Body.String())
 		}
 
-		var batch struct {
-			Status  string           `json:"status"`
-			Results []map[string]any `json:"results"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-			t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-		}
+		batch := decodeBatch(t, rec)
 		if batch.Status != string(response.StatusWorkflowPartiallyStarted) {
 			t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowPartiallyStarted)
 		}
@@ -379,13 +368,7 @@ func TestDispatchHandlerAllOrNothingRejectsAnyIncompleteTrigger(t *testing.T) {
 		t.Error("expected the second binding to still be attempted even though the first failed and the overall result was rejected")
 	}
 
-	var batch struct {
-		Status  string           `json:"status"`
-		Results []map[string]any `json:"results"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-	}
+	batch := decodeBatch(t, rec)
 	if batch.Status != string(response.StatusWorkflowNotStarted) {
 		t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowNotStarted)
 	}
@@ -410,12 +393,7 @@ func TestDispatchHandlerAllOrNothingAcceptsUniformSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusAccepted, rec.Body.String())
 	}
 
-	var batch struct {
-		Status string `json:"status"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &batch); err != nil {
-		t.Fatalf("response body is not the expected JSON object: %v (body: %s)", err, rec.Body.String())
-	}
+	batch := decodeBatch(t, rec)
 	if batch.Status != string(response.StatusWorkflowStarted) {
 		t.Errorf("top-level status = %q, want %q", batch.Status, response.StatusWorkflowStarted)
 	}

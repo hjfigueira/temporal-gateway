@@ -130,8 +130,20 @@ func parseFlags() cliFlags {
 // logStartup records what was loaded: the resolved config, the API spec, and
 // every route/workflow the gateway will serve. It's kept separate from run's
 // control flow so this purely informational logging can grow without
-// touching the wiring logic around it.
+// touching the wiring logic around it. The three things logged - the
+// gateway config, the loaded spec's routes, and the workflow catalog - are
+// independent of each other, so each gets its own function rather than
+// being interleaved in one long body.
 func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg *config.GatewayConfig, apiSpec *spec.Spec) {
+	logGatewayConfig(logger, configPath, cfg)
+	logAPISpec(logger, specPaths, apiSpec)
+	logWorkflowCatalog(logger, cfg)
+}
+
+// logGatewayConfig logs the parsed config.yml: server address, configured
+// Temporal namespaces, and the (currently unenforced - see
+// internal/config.AuthConfig) auth/middleware settings.
+func logGatewayConfig(logger *slog.Logger, configPath string, cfg *config.GatewayConfig) {
 	middlewares := make([]any, len(cfg.Middlewares))
 	for i, mw := range cfg.Middlewares {
 		middlewares[i] = map[string]any{"name": mw.Name, "enabled": mw.Enabled}
@@ -149,7 +161,11 @@ func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg 
 		"auth_type", cfg.Auth.Type,
 		"middlewares", middlewares,
 	)
+}
 
+// logAPISpec logs the loaded (possibly merged - see spec.Load) API spec
+// itself, then every route it generates, one log line per route.
+func logAPISpec(logger *slog.Logger, specPaths []string, apiSpec *spec.Spec) {
 	logger.Info("loaded api spec",
 		"spec_paths", specPaths,
 		"title", apiSpec.Info.Title,
@@ -173,7 +189,13 @@ func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg 
 			"temporal_namespaces", bindingNamespaces,
 		)
 	}
+}
 
+// logWorkflowCatalog logs every workflow declared under each Temporal
+// connection's "workflows" entries (see internal/config.WorkflowDefinition
+// and internal/temporal.Catalog) - informational only, since this catalog
+// isn't cross-checked against the spec's bindings.
+func logWorkflowCatalog(logger *slog.Logger, cfg *config.GatewayConfig) {
 	for _, conn := range cfg.Temporal.Connections {
 		for _, wf := range conn.Workflows {
 			logger.Info("workflow registered",

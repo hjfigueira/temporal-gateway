@@ -1,6 +1,10 @@
 package validate
 
-import "fmt"
+import (
+	"fmt"
+
+	"temporal-gateway/internal/numeric"
+)
 
 // joinPath appends name to a dotted field path, e.g. joinPath("customer",
 // "city") -> "customer.city". A blank path (the schema root) yields just
@@ -38,33 +42,16 @@ func containsValue(allowed []any, data any) bool {
 // numerically if both sides are numbers (so e.g. YAML's `int` and JSON's
 // `float64` compare equal) and by string representation otherwise.
 func valuesEqual(a, b any) bool {
-	if af, ok := toFloat(a); ok {
-		bf, ok := toFloat(b)
+	if af, ok := numeric.ToFloat64(a); ok {
+		bf, ok := numeric.ToFloat64(b)
 		return ok && af == bf
 	}
 	return fmt.Sprint(a) == fmt.Sprint(b)
 }
 
-// toFloat coerces a decoded numeric value into a float64. Handles both
-// encoding/json's float64 and the int/int64/float32 variants a Go caller
-// might otherwise pass in (e.g. from a YAML-decoded schema literal).
-func toFloat(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
-	}
-	return 0, false
-}
-
-// toInt coerces a decoded numeric value into an int, via toFloat.
+// toInt coerces a decoded numeric value into an int, via numeric.ToFloat64.
 func toInt(v any) (int, bool) {
-	f, ok := toFloat(v)
+	f, ok := numeric.ToFloat64(v)
 	if !ok {
 		return 0, false
 	}

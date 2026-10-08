@@ -75,4 +75,11 @@ func TestStatusIsError(t *testing.T) {
 			t.Errorf("%s.IsError() = true, want false", s)
 		}
 	}
+
+	// A Status value IsError doesn't recognize at all (e.g. a new constant
+	// added elsewhere without updating IsError's success list) must read as
+	// an error, not silently pass as success - see IsError's doc comment.
+	if unknown := Status("SOMETHING_NEW"); !unknown.IsError() {
+		t.Errorf("%s.IsError() = false, want true (unrecognized statuses must fail closed)", unknown)
+	}
 }

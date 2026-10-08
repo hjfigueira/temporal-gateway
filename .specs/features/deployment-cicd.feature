@@ -20,16 +20,13 @@ Feature: Container image and release publishing
   Scenario: GOMEMLIMIT gives the Go runtime a soft memory cap
     Given the image sets ENV GOMEMLIMIT=300MiB
     When the process runs under sustained load
-    Then the Go GC runs more aggressively as usage approaches 300MiB
-    Instead of letting RSS grow to roughly 2x live heap
-    And this value is expected to be overridden per-deployment to match
-      the container's actual memory limit
+    Then the Go GC runs more aggressively as usage approaches 300MiB instead of letting RSS grow to roughly 2x live heap
+    And this value is expected to be overridden per-deployment to match the container's actual memory limit
 
   Scenario: The baked-in config/spec are examples, not production config
     Given the image COPYs config.yml and api-spec.yaml as defaults
     When deploying to a real environment
-    Then the operator mounts their own config.yml/api-spec.yaml over the
-      baked-in ones rather than rebuilding the image per environment
+    Then the operator mounts their own config.yml/api-spec.yaml over the baked-in ones rather than rebuilding the image per environment
 
   Scenario: Publishing happens only when a GitHub Release is published
     Given no GitHub Release has been published

@@ -6,6 +6,7 @@ import (
 
 	sdktemporal "go.temporal.io/sdk/temporal"
 
+	"temporal-gateway/internal/numeric"
 	"temporal-gateway/internal/spec"
 )
 
@@ -60,7 +61,7 @@ func searchAttributeUpdate(sa spec.SearchAttribute) (sdktemporal.SearchAttribute
 		}
 		return sdktemporal.NewSearchAttributeKeyInt64(sa.Name).ValueSet(v), nil
 	case "float":
-		v, ok := toFloat64(sa.Value)
+		v, ok := numeric.ToFloat64(sa.Value)
 		if !ok {
 			return nil, fmt.Errorf("value must be a number")
 		}
@@ -102,24 +103,6 @@ func toInt64(v any) (int64, bool) {
 		return n, true
 	case int:
 		return int64(n), true
-	}
-	return 0, false
-}
-
-// toFloat64 coerces a YAML-decoded numeric value into a float64.
-// gopkg.in/yaml.v3 decodes a whole number written without a decimal point
-// as int even when the schema calls for a float, so int/int64 must be
-// accepted too.
-func toFloat64(v any) (float64, bool) {
-	switch n := v.(type) {
-	case float64:
-		return n, true
-	case float32:
-		return float64(n), true
-	case int:
-		return float64(n), true
-	case int64:
-		return float64(n), true
 	}
 	return 0, false
 }

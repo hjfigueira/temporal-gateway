@@ -47,8 +47,7 @@ Feature: Multi-namespace Temporal connections
     # rediscovered as a per-request dispatch error on first use of the route.
 
   Scenario: A workflow catalog entry only supplies a default task queue
-    Given temporal.connections["default"].workflows includes
-      a workflow named "OrderWorkflow" with taskQueue "orders-task-queue"
+    Given temporal.connections["default"].workflows includes a workflow named "OrderWorkflow" with taskQueue "orders-task-queue"
     And a startWorkflow trigger for "OrderWorkflow" does not set its own taskQueue
     When the trigger is dispatched
     Then the catalog's "orders-task-queue" is used
