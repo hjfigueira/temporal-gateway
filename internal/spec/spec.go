@@ -91,6 +91,18 @@ type NexusConfig struct {
 	// WorkflowID may use the same "{origin.field}" templating as a
 	// trigger's own WorkflowID (see internal/gateway's renderTemplate).
 	WorkflowID string `yaml:"workflowId"`
+	// FilterTaskQueue, when set, is a task queue in this same
+	// namespace/cluster that CascadeEvent polls once per trigger, via a
+	// plain Temporal Activity (internal/temporal.CascadeFilterActivityName)
+	// rather than Nexus, to ask whether that trigger's event is even worth
+	// dispatching - see internal/temporal.CascadeEvent. Left empty, no
+	// filtering happens and every trigger is dispatched unconditionally,
+	// same as before this field existed. A worker hosting that activity is
+	// not something the gateway builds itself (same as a nexusDispatchExternal
+	// namespace's Dispatch worker) - see
+	// notification-service/rrbuild/cascadefilter/plugin.go for a worked
+	// example.
+	FilterTaskQueue string `yaml:"filterTaskQueue,omitempty"`
 }
 
 // WorkflowTypeOrDefault returns c.WorkflowType, defaulting to

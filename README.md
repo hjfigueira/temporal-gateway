@@ -129,8 +129,8 @@ apiSpec: "./api-spec.yaml"
 - **`temporal.connections`** - one entry per Temporal namespace the gateway should dial.
   At least one is required, each `namespace` must be unique, and every
   `x-temporal.triggers` entry in the API spec must name a `namespace` present here
-  (checked at startup, not at request time). `nexusEndpoint` and
-  `nexusDispatchTaskQueue` are only needed by namespaces a `driver: nexus` operation
+  (checked at startup, not at request time). `nexusEndpoint`, `nexusDispatchTaskQueue`,
+  and `nexusDispatchExternal` are only needed by namespaces a `driver: nexus` operation
   touches - see [`driver`](#driver).
 - **`otel`** - when `enabled` (the default), the gateway starts one span per request and
   exports it via OTLP/gRPC to `endpoint`, propagating trace context into the dispatched
@@ -309,7 +309,7 @@ beyond what `direct` requires:
 - **`temporal.connections[].nexusEndpoint`** (config.yml) - the name of a [Nexus
   endpoint](https://docs.temporal.io/nexus/endpoint) reaching that namespace. Nexus
   endpoints are a server-side resource, provisioned separately (e.g. `temporal operator
-  nexus endpoint create --name gateway-default --target-namespace default
+  nexus endpoint create --name gateway-notifications --target-namespace notifications
   --target-task-queue temporal-gateway-nexus-dispatch`) - the gateway only references
   them by name, and validates at startup that every namespace needing one has it
   configured (fails fast, same as an unconfigured `namespace`).
@@ -320,6 +320,162 @@ beyond what `direct` requires:
 
 A gateway spec that never uses `driver: nexus` never starts a worker or polls a task
 queue at all - this is entirely opt-in per operation.
+
+### Letting the called service own dispatch: `nexusDispatchExternal`
+
+By default the gateway hosts the `Dispatch` Nexus service for *every* namespace a
+`nexus`-driver trigger targets, using its own generic dispatch logic - fine as long as
+"start whatever CascadeEvent says to start" is all a namespace needs. It often isn't:
+CascadeEvent fans a trigger's payload out to every namespace configured for it,
+indiscriminately, but the namespace on the receiving end may only care about *some* of
+what shows up. Deciding that is business logic that belongs to whoever owns the workflow
+being started, not to the gateway's generic dispatcher - so a namespace can opt out and
+host that decision (and the workflow) itself:
+
+```yaml
+temporal:
+  connections:
+    - namespace: default
+      host: localhost:7233
+      nexusEndpoint: gateway-default
+      nexusDispatchExternal: true   # some other service hosts Dispatch for this namespace
+```
+
+With `nexusDispatchExternal: true`, the gateway skips building a `Dispatch` worker for
+that namespace entirely - `gateway-default`'s Nexus endpoint must then be provisioned to
+target whatever task queue the external service actually polls, not the gateway's own
+`temporal-gateway-nexus-dispatch`. See **`cmd/order-service`** for a complete worked
+example: it's a standalone sample application - not part of the gateway - that owns
+`OrderWorkflow` (the workflow `createOrderViaCascade`'s first trigger targets) and hosts
+its own `Dispatch` Nexus service for the `default` namespace, honoring the exact same
+`DispatchServiceName`/`DispatchOperationName` contract
+(`internal/temporal.NewDispatchService`) the gateway's generic version does - so
+CascadeEvent calls it exactly the same way and can't tell the difference. Before starting
+anything, its operation handler validates the cascaded payload (`validateOrderPayload` in
+`cmd/order-service/main.go` - rejects an order with no `items`, as a stand-in for
+whatever real relevance check a production service would apply) and only calls
+`ExecuteWorkflow` once that passes; an irrelevant payload is rejected right there, so no
+workflow run is ever created for it. Run it alongside the gateway and a Temporal server:
+
+```bash
+go run ./cmd/order-service
+```
+
+It reads the same `TEMPORAL_NAMESPACE`/`TEMPORAL_HOST`/`ORDERS_TASK_QUEUE` env vars (and
+`.env` file) config.yml/api-spec.yaml already use, plus its own
+`ORDER_SERVICE_NEXUS_TASK_QUEUE` (defaults to `order-service-nexus-dispatch`) - that's
+the task queue `gateway-default`'s Nexus endpoint needs to target:
+
+```bash
+temporal operator nexus endpoint create \
+  --name gateway-default \
+  --target-namespace default \
+  --target-task-queue order-service-nexus-dispatch
+```
+
+Note this validation only runs for the cascaded path (`POST /orders/{orderId}/cascade`);
+plain `POST /orders` (the `direct` driver) talks to Temporal directly and never goes
+through Nexus, so it bypasses `order-service`'s validation entirely - the two triggers
+just happen to start the same `OrderWorkflow`.
+
+#### The same pattern in another language: `notification-service` (PHP)
+
+`order-service` hosts its `Dispatch` operation on a Temporal *worker* - a Nexus endpoint
+whose target is a namespace/task queue that a worker polls, same as any other Temporal
+task. That's the norm for SDKs with Nexus support (Go, Java, Python, TypeScript, .NET).
+The PHP SDK isn't one of them: `sdk-php` has no equivalent of
+`worker.RegisterNexusService` at all
+([temporalio/sdk-php#580](https://github.com/temporalio/sdk-php/issues/580), open,
+unimplemented). **`notification-service`** - a second standalone sample application, this
+one owning `NotificationWorkflow` (`createOrderViaCascade`'s second trigger) - shows the
+workaround: Temporal Nexus endpoints support a second kind of target besides a worker,
+an **external URL**, which receives forwarded Nexus requests as plain HTTP - no SDK
+worker abstraction involved on that side at all. `notification-service`'s
+`http-worker.php` hand-implements just enough of the Nexus-over-HTTP protocol (a
+[RoadRunner](https://roadrunner.dev) HTTP worker, no framework) to receive that request.
+
+Unlike `order-service`, where the Nexus operation handler decides relevance inline
+(`validateOrderPayload`, a plain Go function call), `notification-service` decides it
+through a second workflow: **`BusinessRulesWorkflow`**
+(`notification-service/src/BusinessRulesWorkflow.php`) is a long-running, singleton
+workflow (one standing instance per namespace, fixed ID
+`BusinessRulesWorkflow::WORKFLOW_ID`) that exposes relevance as a
+[Query](https://docs.temporal.io/develop/php/message-passing#queries) - `isEventRelevant`
+- genuine, durable Temporal PHP SDK workflow code, executed by a real worker
+(`worker.php`) inside the `notifications` namespace, the same way any other PHP SDK user
+would expose read-only state to the outside world. `http-worker.php`'s `dispatch()`
+lazily starts that standing instance (a no-op once it's already running - see
+`queryEventRelevance`) and queries it *before* starting `NotificationWorkflow` at all: an
+irrelevant event is rejected right there, so - same guarantee `order-service`'s Go gives,
+just reached via a Query instead of an inline function call - no `NotificationWorkflow`
+run is ever created for it. `NotificationWorkflow` itself carries no relevance logic
+anymore; by the time it starts, the event has already been confirmed relevant.
+
+`BusinessRulesWorkflow` keeps itself alive with `Workflow::awaitWithTimeout` +
+`Workflow::continueAsNew` on a 30-day cycle - standard practice for a long-running/entity
+workflow that would otherwise accumulate unbounded history, and unlike
+`isEventRelevant` (a pure function of its input today, same rule
+`order-service`'s `validateOrderPayload` applies in Go), it's the seam a real deployment
+would use to give the workflow actual state - fetched via Activity, updated via Signal -
+for `isEventRelevant` to read.
+
+One pitfall worth calling out, since it's easy to hit and silent when you do:
+`Temporal\Client\WorkflowClient::create()` defaults to the `"default"` namespace unless
+given a `ClientOptions::withNamespace(...)` explicitly - found by hand when
+`NotificationWorkflow` runs kept showing up under `default` instead of `notifications`.
+`http-worker.php` sets it from `TEMPORAL_NOTIFICATIONS_NAMESPACE`.
+
+The wire format `http-worker.php` implements was verified by hand against a real
+Temporal server (not just read off a spec): a synchronous Nexus operation arrives as
+`POST {endpoint's target URL}/{service}/{operation}` (for us,
+`/TemporalGatewayDispatch/Dispatch`), body = JSON-encoded
+`internal/spec.DispatchInput`; a synchronous success is `200` + JSON
+`internal/spec.DispatchOutput`; a non-retryable rejection is `400` with a body carrying
+`metadata.type: "nexus.HandlerError"` and `details.type: "BAD_REQUEST"` - anything else
+(a plain error body, or any `5xx`) is treated as retryable and gets retried indefinitely,
+same pitfall `order-service`'s Go handler has to avoid (see its
+`HandlerErrorTypeBadRequest` comment).
+
+Run it (needs `ext-grpc` - the Temporal PHP SDK's Client component hard-requires the
+native extension at runtime even though `composer install` alone succeeds without it;
+the worker side doesn't need it, only the client-side `WorkflowClient::create` call in
+`http-worker.php` does). The `Dockerfile` builds on
+[`beabys/php-grpc`](https://hub.docker.com/r/beabys/php-grpc), which ships `ext-grpc`
+prebuilt - compiling it from source via `pecl` works too but takes a long time:
+
+```bash
+cd notification-service
+docker build -t notification-service . && docker run --rm -p 8083:8083 \
+  --add-host=host.docker.internal:host-gateway notification-service
+```
+
+(`--add-host` is only needed on Linux - Docker Desktop resolves `host.docker.internal` automatically.
+If your Temporal server is itself in Docker, join its network instead, e.g. `--network
+temporal-network -e TEMPORAL_HOST=temporal:7233`.)
+
+or, if your PHP already has `ext-grpc` installed, without Docker:
+
+```bash
+cd notification-service
+composer install
+composer require --dev spiral/roadrunner-cli && vendor/bin/rr get
+vendor/bin/rr serve
+```
+
+Its Nexus endpoint is provisioned with `--target-url` instead of
+`--target-namespace`/`--target-task-queue`:
+
+```bash
+temporal operator nexus endpoint create \
+  --name gateway-notifications \
+  --target-url http://<host-reachable-from-the-temporal-server>:8083
+```
+
+(`--target-url` is marked **experimental** by Temporal itself - see
+[the self-hosted Nexus guide](https://docs.temporal.io/production-deployment/self-hosted-guide/nexus).)
+`config.yml`'s `notifications` connection still sets `nexusDispatchExternal: true`, for
+exactly the same reason `default`'s does - the gateway shouldn't also try to host a
+`Dispatch` worker nothing will ever call.
 
 ## Request/response behavior
 
@@ -359,16 +515,18 @@ go test -race ./...
 ### Project layout
 
 ```
-main.go              entrypoint: loads config/spec, wires everything, serves HTTP
-internal/config      config.yml parsing
-internal/spec        api-spec.yaml parsing + validation
-internal/gateway     HTTP handler generation, request templating/validation
-internal/temporal    Temporal client(s), namespace connection pool, dispatch
-internal/validate    JSON Schema-lite request body validation
-internal/response    response envelope + status types
-internal/telemetry   OpenTelemetry setup
-internal/envsubst    ${VAR}/${VAR:-default} expansion
-internal/dotenv      .env file loading
+main.go                entrypoint: loads config/spec, wires everything, serves HTTP
+cmd/order-service       sample app (Go): owns OrderWorkflow, worker-target Nexus endpoint
+notification-service   sample app (PHP/RoadRunner): owns NotificationWorkflow, external-URL Nexus endpoint
+internal/config        config.yml parsing
+internal/spec          api-spec.yaml parsing + validation
+internal/gateway       HTTP handler generation, request templating/validation, driver selection
+internal/temporal      Temporal client(s), namespace connection pool, dispatch, CascadeEvent + nexus workers
+internal/validate      JSON Schema-lite request body validation
+internal/response      response envelope + status types
+internal/telemetry     OpenTelemetry setup
+internal/envsubst      ${VAR}/${VAR:-default} expansion
+internal/dotenv        .env file loading
 ```
 
 ## License

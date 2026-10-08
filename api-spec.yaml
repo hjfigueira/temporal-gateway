@@ -94,11 +94,20 @@ paths:
           namespace: "${TEMPORAL_CASCADE_NAMESPACE:-cascade}"
           taskQueue: "${CASCADE_TASK_QUEUE:-cascade-task-queue}"
           workflowId: "cascade-order-{body.orderId}"
+          # Optional: when set, CascadeEvent calls the IsEventRelevant
+          # Activity once per trigger below, in this same "cascade"
+          # namespace, before dispatching it - see README.md and
+          # notification-service/rrbuild/cascadefilter/plugin.go (the Go
+          # RoadRunner plugin that answers it, forwarding to
+          # src/CascadeFilterActivity.php for the actual business rule).
+          # Leave unset to dispatch every trigger unconditionally, same as
+          # before this existed.
+          filterTaskQueue: "${CASCADE_FILTER_TASK_QUEUE:-cascade-filter-task-queue}"
         triggers:
           - action: startWorkflow
             namespace: "${TEMPORAL_NAMESPACE:-default}"
             workflowType: OrderWorkflow
-            workflowId: "order-{body.orderId}-cascade"No
+            workflowId: "order-{body.orderId}-cascade"
             taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
           - action: startWorkflow
             namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-notifications}"

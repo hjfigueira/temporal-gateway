@@ -4,16 +4,31 @@ server:
 
 temporal:
   connections:
+    # nexusDispatchExternal: true means this namespace's Dispatch Nexus
+    # operation is hosted by cmd/order-service, not this gateway - it
+    # validates each cascaded payload against OrderWorkflow's own business
+    # rules before starting anything (see cmd/order-service/main.go).
+    # gateway-default's Nexus endpoint must therefore be provisioned to
+    # target order-service's own dispatch task queue, not this gateway's -
+    # see README.md.
     - namespace: "${TEMPORAL_NAMESPACE:-default}"
       host: "${TEMPORAL_HOST:-localhost:7233}"
       tls:
         enabled: false
       nexusEndpoint: "${TEMPORAL_NEXUS_ENDPOINT:-gateway-default}"
+      nexusDispatchExternal: true
+    # notifications is externally dispatched too, but by notification-service
+    # (PHP/RoadRunner) instead of a Go worker - the PHP Temporal SDK can't
+    # host Nexus operations at all (github.com/temporalio/sdk-php#580), so
+    # gateway-notifications is provisioned as an "external URL" Nexus
+    # endpoint pointing straight at notification-service's own HTTP
+    # listener, rather than a worker namespace/task queue - see README.md.
     - namespace: "${TEMPORAL_NOTIFICATIONS_NAMESPACE:-notifications}"
       host: "${TEMPORAL_NOTIFICATIONS_HOST:-localhost:7233}"
       tls:
         enabled: false
       nexusEndpoint: "${TEMPORAL_NOTIFICATIONS_NEXUS_ENDPOINT:-gateway-notifications}"
+      nexusDispatchExternal: true
     - namespace: "${TEMPORAL_CASCADE_NAMESPACE:-cascade}"
       host: "${TEMPORAL_CASCADE_HOST:-localhost:7233}"
       tls:

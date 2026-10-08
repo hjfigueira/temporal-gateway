@@ -1,0 +1,55 @@
+# Config for notification-service's custom RoadRunner build (rrbuild/,
+# built as ./rr-custom - see rrbuild/main.go for why this isn't the stock
+# ./rr binary). Three plugins now, still one process:
+#
+#  - "temporal" hosts NotificationWorkflow/BusinessRulesWorkflow
+#    (worker.php), polling the notifications namespace/task queue like any
+#    other Temporal worker.
+#  - "http" is a raw Nexus operation handler (http-worker.php), NOT a
+#    Temporal worker at all - the PHP SDK can't host Nexus operations
+#    (github.com/temporalio/sdk-php issue #580), so the "notifications"
+#    Nexus endpoint (config.yml's nexusEndpoint) is instead provisioned to
+#    target this HTTP server's URL directly:
+#
+#      temporal operator nexus endpoint create \
+#        --name gateway-notifications \
+#        --target-url http://<this-host>:8083
+#
+#    (an "external URL" Nexus endpoint target - see README.md).
+#  - "cascade_filter" (rrbuild/cascadefilter/plugin.go) answers CascadeEvent's
+#    per-trigger relevance check (internal/temporal.CascadeFilterActivityName)
+#    for the "cascade" namespace. Activities always run in their calling
+#    workflow's namespace, so this couldn't be the same "temporal" plugin
+#    instance above (that one is pinned to "notifications") without forking
+#    it - cascade_filter is a second, independent plugin instead, with its
+#    own small PHP pool below (cascade-filter-worker.php, which runs
+#    src/CascadeFilterActivity.php - the actual business rule; the Go
+#    plugin only speaks the Temporal SDK and forwards each task into this
+#    pool), still shipped in this one binary/process.
+version: "3"
+
+server:
+  command: "php worker.php"
+
+temporal:
+  address: "${TEMPORAL_HOST}"
+  namespace: "notifications"
+
+http:
+  address: "0.0.0.0:8083"
+  pool:
+    command: "php http-worker.php"
+
+cascade_filter:
+  address: "${TEMPORAL_HOST}"
+  namespace: "cascade"
+  task_queue: "cascade-filter-task-queue"
+  pool:
+    command: "php cascade-filter-worker.php"
+    num_workers: 10
+
+rpc:
+  listen: "tcp://127.0.0.1:6002"
+
+logs:
+  mode: development

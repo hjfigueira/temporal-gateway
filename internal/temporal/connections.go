@@ -21,7 +21,12 @@ type Connection struct {
 	// DispatchTaskQueue mirrors config.TemporalConnectionConfig.
 	// DispatchTaskQueue(): the task queue this namespace's Dispatch Nexus
 	// service worker polls (see BuildNexusWorkers), already defaulted.
+	// Meaningless when DispatchExternal is set.
 	DispatchTaskQueue string
+	// DispatchExternal mirrors config.TemporalConnectionConfig.
+	// NexusDispatchExternal: when true, BuildNexusWorkers does not host a
+	// Dispatch worker for this namespace - some other service does.
+	DispatchExternal bool
 }
 
 // Connections is the temporalConnection dictionary: every Temporal
@@ -49,6 +54,7 @@ func NewConnections(cfg config.TemporalConfig) (Connections, error) {
 			Catalog:           NewCatalog(c.Workflows),
 			NexusEndpoint:     c.NexusEndpoint,
 			DispatchTaskQueue: c.DispatchTaskQueue(),
+			DispatchExternal:  c.NexusDispatchExternal,
 		}
 	}
 	return conns, nil

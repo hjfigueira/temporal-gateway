@@ -46,8 +46,23 @@ type TemporalConnectionConfig struct {
 	// unused otherwise.
 	NexusEndpoint string `yaml:"nexusEndpoint,omitempty"`
 	// NexusDispatchTaskQueue is the task queue this namespace's Dispatch
-	// Nexus service worker polls - see DispatchTaskQueue.
+	// Nexus service worker polls - see DispatchTaskQueue. Meaningless when
+	// NexusDispatchExternal is set, since the gateway doesn't host that
+	// worker at all in that case.
 	NexusDispatchTaskQueue string `yaml:"nexusDispatchTaskQueue,omitempty"`
+	// NexusDispatchExternal, when true, tells the gateway NOT to host a
+	// Dispatch Nexus service worker for this namespace even though a
+	// nexus-driver trigger targets it (see
+	// internal/temporal.BuildNexusWorkers) - some other service owns
+	// starting (and validating) workflows here instead; see
+	// examples/order-service for a worked example of why a namespace would
+	// want that: the validation deciding whether a cascaded event is even
+	// relevant is that service's own business logic, not something the
+	// gateway's generic dispatch should have an opinion on. NexusEndpoint
+	// is still required either way - it must be provisioned to target
+	// whichever task queue that external service actually polls, not this
+	// gateway's.
+	NexusDispatchExternal bool `yaml:"nexusDispatchExternal,omitempty"`
 }
 
 // DispatchTaskQueue returns c.NexusDispatchTaskQueue, defaulting to

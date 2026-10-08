@@ -100,8 +100,9 @@ func nexusDispatchHandler(route spec.Route, dispatcher Dispatcher, nexusEndpoint
 		cascadeBinding := binding
 		cascadeBinding.WorkflowID = renderTemplate(cfg.WorkflowID, resolve)
 		cascadeInput := spec.CascadeInput{
-			Body:     body,
-			Triggers: renderCascadeTriggers(triggers, resolve, nexusEndpoints),
+			Body:            body,
+			Triggers:        renderCascadeTriggers(triggers, resolve, nexusEndpoints),
+			FilterTaskQueue: cfg.FilterTaskQueue,
 		}
 
 		result, err := dispatcher.Dispatch(ctx, cascadeBinding, cascadeBinding.WorkflowID, cascadeInput)

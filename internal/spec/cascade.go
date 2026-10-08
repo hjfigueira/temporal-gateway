@@ -18,10 +18,14 @@ type CascadeTrigger struct {
 // CascadeInput is the CascadeEvent workflow's input: the original request
 // body (so the workflow can reference other fields the way a direct
 // dispatch could) plus every trigger the operation declared, already
-// rendered (see CascadeTrigger).
+// rendered (see CascadeTrigger), plus NexusConfig.FilterTaskQueue carried
+// through unchanged - a workflow only sees what's in its input, so this has
+// to be threaded in from the gateway process the same way the triggers
+// themselves are (see internal/gateway.nexusDispatchHandler).
 type CascadeInput struct {
-	Body     any              `json:"body,omitempty"`
-	Triggers []CascadeTrigger `json:"triggers"`
+	Body            any              `json:"body,omitempty"`
+	Triggers        []CascadeTrigger `json:"triggers"`
+	FilterTaskQueue string           `json:"filterTaskQueue,omitempty"`
 }
 
 // CascadeTriggerResult is one trigger's outcome from the Dispatch Nexus

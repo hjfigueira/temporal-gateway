@@ -24,12 +24,15 @@ type NexusWorkers []worker.Worker
 // driver and constructs the workers described by NexusWorkers, wiring the
 // Dispatch Nexus service to dispatcher - the same one the direct driver
 // uses (see internal/gateway.DirectDriver) - so both drivers execute
-// triggers through identical Temporal-client logic. Returns an empty,
-// unstarted NexusWorkers (see NexusWorkers.Start), not an error, if no
-// operation selects the nexus driver. Assumes apiSpec has already passed
-// spec.Spec.validate and ValidateNexusConfig, so every nexus-driver
-// operation's Config is non-nil and every trigger's namespace resolves in
-// connections.
+// triggers through identical Temporal-client logic. A namespace whose
+// connection sets NexusDispatchExternal is skipped entirely: some other
+// service owns hosting (and validating) that namespace's Dispatch
+// operation instead - see examples/order-service for a worked example.
+// Returns an empty, unstarted NexusWorkers (see NexusWorkers.Start), not an
+// error, if no operation selects the nexus driver. Assumes apiSpec has
+// already passed spec.Spec.validate and ValidateNexusConfig, so every
+// nexus-driver operation's Config is non-nil and every trigger's namespace
+// resolves in connections.
 func BuildNexusWorkers(apiSpec *spec.Spec, connections Connections, dispatcher *Dispatcher) (NexusWorkers, error) {
 	type cascadeTarget struct {
 		namespace, taskQueue string
@@ -72,6 +75,9 @@ func BuildNexusWorkers(apiSpec *spec.Spec, connections Connections, dispatcher *
 		conn, err := connections.resolve(namespace)
 		if err != nil {
 			return nil, fmt.Errorf("nexus driver: dispatch service: %w", err)
+		}
+		if conn.DispatchExternal {
+			continue
 		}
 		w := worker.New(conn.Client, conn.DispatchTaskQueue, worker.Options{})
 		w.RegisterNexusService(NewDispatchService(dispatcher))
