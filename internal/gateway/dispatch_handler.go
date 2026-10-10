@@ -57,21 +57,10 @@ func (o dispatchOutcome) succeeded() bool {
 	return true
 }
 
-// dispatchHandler resolves path params and the JSON body, then renders and
-// dispatches each of the operation's x-temporal.triggers in parallel, so
-// one HTTP call can trigger several Temporal actions at once and a failure
-// in one trigger doesn't prevent the others from starting. When more than
-// one trigger is dispatched, the response is a response.BatchResult: a
-// top-level status of WORKFLOW_STARTED if every trigger succeeded,
-// WORKFLOW_NOT_STARTED if none did, or WORKFLOW_PARTIALLY_STARTED if it's a
-// genuine mix of both - plus each trigger's own per-item result (each
-// naming which workflow it's about). How that maps to an HTTP status
-// depends on the operation's x-temporal.returnStrategy (see
-// writeBatchResult): under the default "acceptPartial", only the
-// genuine-mix case is reported under HTTP 207 Multi-Status, with a uniform
-// outcome (all started, or none did) getting an ordinary single status
-// code; under "allOrNothing", anything short of every trigger succeeding is
-// reported as HTTP 409 Conflict.
+// dispatchHandler decodes and validates the request, renders every
+// trigger's workflowId, then dispatches the operation's x-temporal.triggers
+// in parallel (see dispatchAll). One trigger reports its own result; more
+// than one report a response.BatchResult (see writeBatchResult).
 func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
 	bindings := route.Operation.Temporal.Triggers
@@ -118,7 +107,8 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 			if opts.MaxBodyBytes > 0 {
 				r.Body = http.MaxBytesReader(w, r.Body, opts.MaxBodyBytes)
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			var err error
+			if body, err = decodeBody(r.Body); err != nil {
 				span.RecordError(err)
 				var tooLarge *http.MaxBytesError
 				if errors.As(err, &tooLarge) {
@@ -180,33 +170,62 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 	}
 }
 
+// decodeBody decodes a JSON request body, or returns nil for an empty one.
+// Numbers stay json.Number, so an ID like 12345678901234567 reaches
+// workflow IDs and workflow inputs exactly, not rounded through float64
+// (ADR-028). Anything after the first JSON value is an error.
+func decodeBody(r io.Reader) (any, error) {
+	dec := json.NewDecoder(r)
+	dec.UseNumber()
+	var body any
+	if err := dec.Decode(&body); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("unexpected data after the JSON value")
+		}
+		return nil, err
+	}
+	return body, nil
+}
+
 // dispatchAll runs dispatcher.Dispatch for every binding concurrently, each
-// with its already-rendered workflowIDs[i]. Running them in parallel,
-// rather than stopping at the first failure, means one bad binding can't
-// prevent the others in the same request from starting.
+// with its already-rendered workflowIDs[i], so one bad binding can't
+// prevent the others in the same request from starting. A single binding
+// is dispatched inline.
 func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.TemporalBinding, workflowIDs []string, body any) []dispatchOutcome {
 	outcomes := make([]dispatchOutcome, len(bindings))
-
-	// The common case is a single binding per operation, where spawning a
-	// goroutine just for fan-out buys no parallelism - it only costs a
-	// stack allocation and a scheduling round trip on every request.
 	if len(bindings) == 1 {
-		result, err := dispatcher.Dispatch(ctx, bindings[0], workflowIDs[0], body)
-		outcomes[0] = dispatchOutcome{workflowID: workflowIDs[0], result: result, err: err}
+		outcomes[0] = dispatchOne(ctx, dispatcher, bindings[0], workflowIDs[0], body)
 		return outcomes
 	}
 
 	var wg sync.WaitGroup
 	for i, binding := range bindings {
-		wg.Add(1)
-		go func(i int, binding spec.TemporalBinding) {
-			defer wg.Done()
-			result, err := dispatcher.Dispatch(ctx, binding, workflowIDs[i], body)
-			outcomes[i] = dispatchOutcome{workflowID: workflowIDs[i], result: result, err: err}
-		}(i, binding)
+		wg.Go(func() {
+			outcomes[i] = dispatchOne(ctx, dispatcher, binding, workflowIDs[i], body)
+		})
 	}
 	wg.Wait()
 	return outcomes
+}
+
+// dispatchOne runs one Dispatch, turning a panic into that binding's error:
+// net/http only recovers panics on the handler's own goroutine, so one in a
+// fan-out goroutine would otherwise crash the whole gateway.
+func dispatchOne(ctx context.Context, dispatcher Dispatcher, binding spec.TemporalBinding, workflowID string, body any) (outcome dispatchOutcome) {
+	outcome.workflowID = workflowID
+	defer func() {
+		if r := recover(); r != nil {
+			outcome.result, outcome.err = nil, fmt.Errorf("dispatch panicked: %v", r)
+		}
+	}()
+	outcome.result, outcome.err = dispatcher.Dispatch(ctx, binding, workflowID, body)
+	return outcome
 }
 
 // collectResults turns each dispatch outcome into its response item and

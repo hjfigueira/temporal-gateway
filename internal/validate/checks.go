@@ -2,25 +2,25 @@ package validate
 
 import (
 	"fmt"
-	"regexp"
+	"math"
+	"unicode/utf8"
 )
 
 // typeMatches reports whether data is a JSON value of the schema type named
 // want ("string", "number", "integer", "boolean", "object", "array", or
-// "null"). An unrecognized want accepts anything, on the assumption that a
-// typo in the spec's "type" keyword shouldn't reject every request against
-// that route.
+// "null"). CheckSchema rejects any other want at spec load, so the default
+// case is unreachable for a served route.
 func typeMatches(want string, data any) bool {
 	switch want {
 	case "string":
 		_, ok := data.(string)
 		return ok
 	case "number":
-		_, ok := data.(float64)
+		_, ok := toFloat(data)
 		return ok
 	case "integer":
-		f, ok := data.(float64)
-		return ok && f == float64(int64(f))
+		f, ok := toFloat(data)
+		return ok && f == math.Trunc(f)
 	case "boolean":
 		_, ok := data.(bool)
 		return ok
@@ -87,17 +87,19 @@ func checkArray(schema map[string]any, data []any, path string, out *[]violation
 }
 
 // checkString applies schema's "minLength", "maxLength", and "pattern"
-// keywords to a JSON string value.
+// keywords to a JSON string value. Lengths count characters, not bytes, as
+// JSON Schema specifies.
 func checkString(schema map[string]any, value string, path string, out *[]violation) {
 	label := displayField(path)
-	if minLen, ok := toInt(schema["minLength"]); ok && len(value) < minLen {
+	length := utf8.RuneCountInString(value)
+	if minLen, ok := toInt(schema["minLength"]); ok && length < minLen {
 		*out = append(*out, violation{path, msgMinLength(label, minLen)})
 	}
-	if maxLen, ok := toInt(schema["maxLength"]); ok && len(value) > maxLen {
+	if maxLen, ok := toInt(schema["maxLength"]); ok && length > maxLen {
 		*out = append(*out, violation{path, msgMaxLength(label, maxLen)})
 	}
 	if patternRaw, ok := schema["pattern"].(string); ok {
-		re, err := regexp.Compile(patternRaw)
+		re, err := compilePattern(patternRaw)
 		if err == nil && !re.MatchString(value) {
 			*out = append(*out, violation{path, msgFormat(label)})
 		}

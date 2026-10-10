@@ -7,6 +7,7 @@
 package validate
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"temporal-gateway/internal/response"
@@ -86,6 +87,10 @@ func walk(schema map[string]any, data any, path string, out *[]violation) {
 		checkString(schema, v, path, out)
 	case float64:
 		checkNumber(schema, v, path, out)
+	case json.Number:
+		if f, ok := toFloat(v); ok {
+			checkNumber(schema, f, path, out)
+		}
 	case map[string]any:
 		checkObject(schema, v, path, out)
 	case []any:

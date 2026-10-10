@@ -7,7 +7,10 @@ info:
     OpenAPI 3.0.3 parser: parameter locations & styles, schema types,
     formats, constraints, composition keywords, request/response content
     types, security schemes, and structural edge cases. See the inline
-    comment above each path for what it validates.
+    comment above each path for what it validates. Every operation carries
+    the smallest valid x-temporal trigger (getResult, fixed workflowId) so the
+    gateway accepts it; the point is that none of the OpenAPI constructs
+    around it break spec loading or route registration.
   termsOfService: "https://example.com/terms"
   contact:
     name: API Test Fixtures
@@ -57,6 +60,11 @@ paths:
   /params/path/{simpleParam}/{explodeArrayParam}/{labelParam}/{matrixParam}:
     get:
       operationId: pathParamStyles
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-pathParamStyles"
       tags: [parameters]
       summary: Exercises every path-parameter style.
       parameters:
@@ -104,6 +112,11 @@ paths:
   /params/query:
     get:
       operationId: queryParamStyles
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-queryParamStyles"
       tags: [parameters]
       summary: Exercises every query-parameter style and edge case.
       parameters:
@@ -188,6 +201,11 @@ paths:
   /params/header-and-cookie:
     get:
       operationId: headerAndCookieParams
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-headerAndCookieParams"
       tags: [parameters]
       summary: Exercises header and cookie parameter locations.
       parameters:
@@ -232,6 +250,11 @@ paths:
   /schemas/primitives:
     post:
       operationId: primitiveTypesAndFormats
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-primitiveTypesAndFormats"
       tags: [schemas]
       summary: Every primitive type with every relevant format and constraint.
       requestBody:
@@ -247,6 +270,11 @@ paths:
   /schemas/composition:
     post:
       operationId: compositionKeywords
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-compositionKeywords"
       tags: [schemas]
       summary: allOf / oneOf / anyOf / not / discriminator.
       requestBody:
@@ -268,6 +296,11 @@ paths:
   /schemas/collections-and-objects:
     post:
       operationId: collectionsAndObjects
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-collectionsAndObjects"
       tags: [schemas]
       summary: >
         Nested objects, arrays of objects, arrays of arrays, free-form
@@ -340,6 +373,11 @@ paths:
   /schemas/references-and-nullability:
     get:
       operationId: referencesAndNullability
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-referencesAndNullability"
       tags: [schemas]
       summary: $ref reuse, nullable, readOnly/writeOnly, default, deprecated field.
       responses:
@@ -370,6 +408,11 @@ paths:
   /content/multi-format:
     post:
       operationId: multiFormatBody
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-multiFormatBody"
       tags: [content-types]
       summary: Same operation accepting multiple request content types.
       requestBody:
@@ -397,6 +440,11 @@ paths:
   /content/file-upload:
     post:
       operationId: multipartFileUpload
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-multipartFileUpload"
       tags: [content-types]
       summary: multipart/form-data with binary file + metadata fields.
       requestBody:
@@ -429,6 +477,11 @@ paths:
   /content/raw-binary:
     put:
       operationId: rawBinaryUpload
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-rawBinaryUpload"
       tags: [content-types]
       summary: application/octet-stream raw body.
       requestBody:
@@ -445,6 +498,11 @@ paths:
   /content/multi-response:
     get:
       operationId: multiStatusResponses
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-multiStatusResponses"
       tags: [content-types]
       summary: >
         Multiple explicit status codes, a "default" response, response
@@ -496,6 +554,11 @@ paths:
   /security/api-key:
     get:
       operationId: apiKeySecured
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-apiKeySecured"
       tags: [security]
       summary: apiKey security scheme.
       security:
@@ -507,6 +570,11 @@ paths:
   /security/basic:
     get:
       operationId: basicAuthSecured
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-basicAuthSecured"
       tags: [security]
       summary: HTTP Basic security scheme.
       security:
@@ -518,6 +586,11 @@ paths:
   /security/bearer-jwt:
     get:
       operationId: bearerJwtSecured
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-bearerJwtSecured"
       tags: [security]
       summary: HTTP Bearer (JWT) security scheme.
       security:
@@ -529,6 +602,11 @@ paths:
   /security/oauth2:
     get:
       operationId: oauth2Secured
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-oauth2Secured"
       tags: [security]
       summary: OAuth2 with scoped access, all four flow types defined on the scheme.
       security:
@@ -540,6 +618,11 @@ paths:
   /security/openid-connect:
     get:
       operationId: openIdConnectSecured
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-openIdConnectSecured"
       tags: [security]
       summary: OpenID Connect security scheme.
       security:
@@ -551,6 +634,11 @@ paths:
   /security/combined-and-or:
     get:
       operationId: combinedSecurityRequirements
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-combinedSecurityRequirements"
       tags: [security]
       summary: >
         Security requirement array = OR between options; object with
@@ -572,6 +660,11 @@ paths:
   /structural/callbacks:
     post:
       operationId: registerWebhook
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-registerWebhook"
       tags: [structural]
       summary: Callback object describing an out-of-band webhook the server will call.
       requestBody:
@@ -608,6 +701,11 @@ paths:
   /structural/deprecated-operation:
     get:
       operationId: deprecatedOperation
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-deprecatedOperation"
       tags: [structural]
       summary: Whole operation marked deprecated.
       deprecated: true
@@ -629,6 +727,11 @@ paths:
           type: string
     get:
       operationId: pathLevelParamInheritanceGet
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-pathLevelParamInheritanceGet"
       tags: [structural]
       summary: Inherits resourceId + X-Common-Header from the path item.
       responses:
@@ -636,6 +739,11 @@ paths:
           description: OK
     delete:
       operationId: pathLevelParamInheritanceDelete
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-pathLevelParamInheritanceDelete"
       tags: [structural]
       summary: Also inherits resourceId + X-Common-Header; adds its own param.
       parameters:
@@ -651,6 +759,11 @@ paths:
   /structural/servers-override:
     get:
       operationId: operationLevelServerOverride
+      x-temporal:
+        triggers:
+          - action: getResult
+            namespace: default
+            workflowId: "fixture-operationLevelServerOverride"
       tags: [structural]
       summary: Overrides the global servers list at the operation level.
       servers:

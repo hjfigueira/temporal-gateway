@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"temporal-gateway/internal/gateway/health"
 	"time"
 
 	"github.com/joho/godotenv"
 
 	"temporal-gateway/internal/config"
 	"temporal-gateway/internal/gateway"
+	"temporal-gateway/internal/gateway/health"
 	"temporal-gateway/internal/spec"
 	"temporal-gateway/internal/telemetry"
 	"temporal-gateway/internal/temporal"

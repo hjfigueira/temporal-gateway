@@ -1,5 +1,7 @@
 # ADR-025: `{fingerprint(...)}` placeholder and nested body paths
 
+**Extended by [ADR-028](0028-exact-json-numbers-in-request-bodies.md)**: bodies now keep exact numbers; fingerprints still hash them as float64, so their format is unchanged.
+
 **Status:** Accepted. Extends [ADR-004](0004-origin-field-placeholders-for-workflow-id-templating.md) and [ADR-020](0020-unresolved-workflow-id-placeholders-are-rejected.md).
 
 **Related features:** [`workflow-id-templating.feature`](../../features/workflow-id-templating.feature)

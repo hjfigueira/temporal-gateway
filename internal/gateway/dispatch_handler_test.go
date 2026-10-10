@@ -530,3 +530,76 @@ func TestDispatchHandlerDoesNotLeakRawTemporalErrors(t *testing.T) {
 		t.Errorf("response leaks the raw Temporal error: %s", body)
 	}
 }
+
+// bodyDispatcher records the body and workflowID of its last dispatch.
+type bodyDispatcher struct {
+	workflowID string
+	body       any
+}
+
+func (d *bodyDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, body any) (any, error) {
+	d.workflowID, d.body = workflowID, body
+	return response.WorkflowStarted{Envelope: response.Envelope{Status: response.StatusStarted}}, nil
+}
+
+func TestDispatchHandlerKeepsExactNumbers(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &bodyDispatcher{}
+	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, Options{}, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":12345678901234567}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if dispatcher.workflowID != "order-12345678901234567" {
+		t.Errorf("workflowID = %q, want order-12345678901234567", dispatcher.workflowID)
+	}
+	// What the Temporal JSON payload converter will send as workflow input.
+	if input, _ := json.Marshal(dispatcher.body); string(input) != `{"orderId":12345678901234567}` {
+		t.Errorf("workflow input = %s, want the exact number", input)
+	}
+}
+
+func TestDispatchHandlerRejectsTrailingData(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{}
+	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, Options{}, logger)
+
+	for _, body := range []string{`{"orderId":"o1"} garbage`, `{"orderId":"o1"}{"orderId":"o2"}`} {
+		rec := httptest.NewRecorder()
+		handler(rec, httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(body)))
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("%s: status = %d, want 422", body, rec.Code)
+		}
+	}
+	if len(dispatcher.seen) != 0 {
+		t.Errorf("dispatched %v, want nothing dispatched", dispatcher.seen)
+	}
+}
+
+type panickingDispatcher struct{}
+
+func (panickingDispatcher) Dispatch(_ context.Context, binding spec.TemporalBinding, workflowID string, _ any) (any, error) {
+	if binding.WorkflowType == "NotificationWorkflow" {
+		panic("boom")
+	}
+	return response.WorkflowStarted{Envelope: response.Envelope{Status: response.StatusStarted}, WorkflowID: workflowID}, nil
+}
+
+func TestDispatchHandlerRecoversPanickingTrigger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := dispatchHandler(twoBindingRoute(), panickingDispatcher{}, Options{}, logger)
+
+	rec := httptest.NewRecorder()
+	handler(rec, httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`)))
+
+	if rec.Code != http.StatusMultiStatus {
+		t.Fatalf("status = %d, want 207 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "boom") {
+		t.Errorf("panic value leaked to the client: %s", rec.Body.String())
+	}
+}

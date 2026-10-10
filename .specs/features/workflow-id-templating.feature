@@ -1,6 +1,7 @@
 # See .specs/adr/active/0004-origin-field-placeholders-for-workflow-id-templating.md
 # See .specs/adr/active/0020-unresolved-workflow-id-placeholders-are-rejected.md
 # See .specs/adr/active/0025-fingerprint-placeholder-and-nested-body-paths.md
+# See .specs/adr/active/0028-exact-json-numbers-in-request-bodies.md
 # Code: internal/templating (parse + render), internal/spec/validation.go
 #       (validateWorkflowIDTemplate), internal/gateway/dispatch_handler.go
 
@@ -50,12 +51,21 @@ Feature: Workflow ID templating
     And the message names "{body.orderId}"
     And neither trigger is dispatched
 
-  Scenario: A non-string JSON body field stringifies for use in a template
-    Given workflowId is "order-{body.metadata}"
-    And body field "metadata" is a JSON object, not a string
+  Scenario Outline: A non-string JSON body field stringifies for use in a template
+    Given workflowId is "order-{body.value}"
+    And the request body is {"value": <json>}
     When the template is rendered
-    Then the object renders as its Go-syntax representation
+    Then the resulting workflow ID is "order-<rendered>"
     And rendering does not error or reject the request
+    # Numbers keep the exact digits sent (ADR-028), never exponent form or
+    # float64 rounding; objects and arrays render as compact JSON.
+
+    Examples:
+      | json              | rendered          |
+      | 10000000          | 10000000          |
+      | 12345678901234567 | 12345678901234567 |
+      | true              | true              |
+      | {"b":2,"a":1}     | {"a":1,"b":2}     |
 
   Scenario: An unknown origin fails spec loading
     Given workflowId contains "{cookie.sessionId}"
@@ -95,7 +105,8 @@ Feature: Workflow ID templating
     Given workflowId is "order-{fingerprint(body)}"
     When two requests send {"a":1,"b":"x"} and {"b":"x","a":1.0}
     Then both render the same 16-hex-character workflow ID suffix
-    # SHA-256 of the canonical JSON (sorted keys), first 16 hex chars.
+    # SHA-256 of the canonical JSON (sorted keys, numbers as float64),
+    # first 16 hex chars. Unchanged by ADR-028's exact-number decoding.
     But a request with {"a":2,"b":"x"} renders a different one
 
   Scenario: fingerprint can target one value

@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -116,26 +115,54 @@ func walkBody(value any, path []PathSegment) (any, bool) {
 }
 
 // fingerprint returns the first 16 hex chars (64 bits) of the SHA-256 of
-// value's canonical JSON. encoding/json sorts object keys and a decoded
-// number is always a float64, so key order and 1 vs 1.0 don't change it.
+// value's canonical JSON. encoding/json sorts object keys, and numbers are
+// hashed as float64, so key order and 1 vs 1.0 don't change it. The format
+// is a contract (ADR-025): changing it changes every derived workflow ID.
 func fingerprint(value any) string {
 	// value is a decoded JSON value or a string, which always re-encode.
-	data, _ := json.Marshal(value)
+	data, _ := json.Marshal(asFloats(value))
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:8])
 }
 
+// asFloats returns value with every json.Number converted to float64, the
+// form fingerprints were defined over before bodies kept exact numbers
+// (ADR-028).
+func asFloats(value any) any {
+	switch v := value.(type) {
+	case json.Number:
+		f, _ := v.Float64()
+		return f
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = asFloats(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = asFloats(e)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // stringifyField renders a decoded JSON body value as a string for use in a
-// workflowId template. JSON objects and arrays are not meaningful workflow
-// ID components, so they render as their Go-syntax representation rather
-// than being rejected outright.
+// workflowId template. A number keeps its exact digits as sent (ADR-028);
+// an object or array renders as its compact JSON.
 func stringifyField(v any) string {
 	switch t := v.(type) {
 	case string:
 		return t
+	case json.Number:
+		return t.String()
 	case nil:
 		return ""
 	default:
-		return fmt.Sprint(t)
+		data, _ := json.Marshal(t)
+		return string(data)
 	}
 }

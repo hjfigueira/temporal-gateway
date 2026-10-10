@@ -63,9 +63,10 @@ health:
 # span per HTTP request and exports it via OTLP/gRPC to endpoint; that
 # span's trace context is also propagated into the Temporal headers of
 # every workflow action the request dispatches, so a workflow's own
-# tracing (if instrumented) continues the same trace. Disabled by default
-# since it requires a reachable OTLP collector (e.g. the OpenTelemetry
-# Collector, Jaeger, or a vendor agent) at endpoint.
+# tracing (if instrumented) continues the same trace. Enabled by default;
+# export is non-blocking (ADR-013), so an unreachable OTLP collector (e.g.
+# the OpenTelemetry Collector, Jaeger, or a vendor agent) at endpoint
+# doesn't affect requests. Set OTEL_ENABLED=false to turn it off.
 otel:
   enabled: ${OTEL_ENABLED:-true}
   serviceName: "${OTEL_SERVICE_NAME:-temporal-gateway}"

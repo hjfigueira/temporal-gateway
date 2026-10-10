@@ -2,17 +2,20 @@ package validate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"temporal-gateway/internal/response"
 )
 
 // decode parses a JSON literal the way the gateway does, so numbers come
-// out as float64 and objects as map[string]any.
+// out as json.Number and objects as map[string]any.
 func decode(t *testing.T, jsonLiteral string) any {
 	t.Helper()
+	dec := json.NewDecoder(strings.NewReader(jsonLiteral))
+	dec.UseNumber()
 	var data any
-	if err := json.Unmarshal([]byte(jsonLiteral), &data); err != nil {
+	if err := dec.Decode(&data); err != nil {
 		t.Fatalf("invalid test JSON %q: %v", jsonLiteral, err)
 	}
 	return data

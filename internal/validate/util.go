@@ -1,6 +1,9 @@
 package validate
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // joinPath appends name to a dotted field path, e.g. joinPath("customer",
 // "city") -> "customer.city". A blank path (the schema root) yields just
@@ -45,11 +48,14 @@ func valuesEqual(a, b any) bool {
 	return fmt.Sprint(a) == fmt.Sprint(b)
 }
 
-// toFloat coerces a decoded numeric value into a float64. Handles both
-// encoding/json's float64 and the int/int64/float32 variants a Go caller
-// might otherwise pass in (e.g. from a YAML-decoded schema literal).
+// toFloat coerces a decoded numeric value into a float64. Handles the
+// gateway's json.Number bodies, plain float64, and the int/int64/float32
+// variants a YAML-decoded schema literal comes as.
 func toFloat(v any) (float64, bool) {
 	switch n := v.(type) {
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
 	case float64:
 		return n, true
 	case float32:

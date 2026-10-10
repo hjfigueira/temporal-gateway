@@ -48,6 +48,8 @@ which.
 | [0025](active/0025-fingerprint-placeholder-and-nested-body-paths.md) | `{fingerprint(...)}` placeholder and nested body paths |
 | [0026](active/0026-serve-http-before-temporal-connects.md) | Serve HTTP immediately; Temporal readiness via probes |
 | [0027](active/0027-godotenv-for-dotenv-loading.md) | Load `.env` with `joho/godotenv`, not a hand-rolled parser |
+| [0028](active/0028-exact-json-numbers-in-request-bodies.md) | Exact JSON numbers in request bodies |
+| [0029](active/0029-request-body-schemas-checked-at-load.md) | Request body schemas are checked at load |
 
 ## Adding a new decision
 

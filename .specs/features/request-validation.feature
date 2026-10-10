@@ -1,4 +1,6 @@
 # See .specs/adr/active/0009-json-schema-lite-validator-with-laravel-style-messages.md
+# See .specs/adr/active/0028-exact-json-numbers-in-request-bodies.md
+# See .specs/adr/active/0029-request-body-schemas-checked-at-load.md
 # Code: internal/gateway/body_validation.go, internal/validate/validate.go,
 #       internal/validate/checks.go, internal/validate/messages.go
 
@@ -62,6 +64,35 @@ Feature: Request body validation
     When the request is decoded
     Then the response is 422 with status "INVALID_REQUEST"
     And the message names the JSON decoding error
+
+  Scenario: Data after the JSON value is rejected
+    Given the request body is {"orderId":"o1"} followed by more data
+    When the request is decoded
+    Then the response is 422 with status "INVALID_REQUEST"
+    And nothing is dispatched
+
+  Scenario: Numbers reach Temporal exactly as sent
+    Given the request body is {"orderId": 12345678901234567}
+    When the request is dispatched
+    Then the workflow input carries 12345678901234567, not a float64-rounded value
+    And a schema of type "integer" accepts it
+
+  Scenario: Length limits count characters, not bytes
+    Given a field is declared type "string" with minLength 4 and maxLength 4
+    And the request sends "José" (4 characters, 5 bytes)
+    When the body is validated
+    Then validation reports status "VALID"
+
+  Scenario Outline: A schema mistake fails spec loading
+    Given a requestBody schema with <mistake>
+    When the API spec is loaded
+    Then loading fails naming the field and the problem
+    # ADR-029: a typo must not silently switch a check off.
+
+    Examples:
+      | mistake                       |
+      | type: strnig                  |
+      | pattern: "(["                 |
 
   Scenario: additionalProperties: false rejects an undeclared field
     Given the schema sets additionalProperties: false

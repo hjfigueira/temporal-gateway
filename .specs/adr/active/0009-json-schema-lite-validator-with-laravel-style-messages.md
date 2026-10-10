@@ -1,5 +1,7 @@
 # ADR-009: Hand-rolled JSON-Schema-lite validator with Laravel-style messages
 
+**Extended by [ADR-029](0029-request-body-schemas-checked-at-load.md)**: unknown `type` values and invalid `pattern`s now fail spec load; lengths count characters.
+
 **Status:** Accepted
 
 **Related features:** [`request-validation.feature`](../../features/request-validation.feature)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"temporal-gateway/internal/templating"
+	"temporal-gateway/internal/validate"
 )
 
 // validIDReusePolicies mirrors the WorkflowIDReusePolicy values the
@@ -53,10 +54,11 @@ var validReturnStrategies = map[ReturnStrategy]bool{
 	ReturnStrategyAllOrNothing:  true,
 }
 
-// validate checks every operation's x-temporal bindings and returns a
-// single error joining every problem found (via errors.Error(), one per
-// line), rather than stopping at the first, so a misconfigured spec can be
-// fixed in one pass instead of being rediscovered error-by-error.
+// validate checks every operation's request body schema and x-temporal
+// bindings and returns a single error joining every problem found (via
+// errors.Error(), one per line), rather than stopping at the first, so a
+// misconfigured spec can be fixed in one pass instead of being rediscovered
+// error-by-error.
 func (s *Spec) validate() error {
 	var errs []error
 	for path, item := range s.Paths {
@@ -64,6 +66,11 @@ func (s *Spec) validate() error {
 			if len(op.Temporal.Triggers) == 0 {
 				errs = append(errs, fmt.Errorf("%s %s: missing x-temporal.triggers", method, path))
 				continue
+			}
+			if op.RequestBody != nil {
+				if err := validate.CheckSchema(op.RequestBody.Content["application/json"].Schema); err != nil {
+					errs = append(errs, fmt.Errorf("%s %s: requestBody schema: %w", method, path, err))
+				}
 			}
 			if !validReturnStrategies[op.Temporal.ReturnStrategy] {
 				errs = append(errs, fmt.Errorf("%s %s: x-temporal: unknown returnStrategy %q", method, path, op.Temporal.ReturnStrategy))

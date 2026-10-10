@@ -310,3 +310,28 @@ func TestValidateWorkflowIDPlaceholders(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateRejectsBadRequestBodySchema(t *testing.T) {
+	yamlContent := specHeader + `      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sku: {type: strnig, pattern: "(["}
+      x-temporal:
+        triggers:
+        - action: getResult
+          namespace: default
+          workflowId: "widget-1"
+`
+	_, err := loadSpec(t, yamlContent)
+	if err == nil {
+		t.Fatal("expected an error for an unknown type and an invalid pattern")
+	}
+	for _, want := range []string{"requestBody schema", `unknown type "strnig"`, "invalid pattern"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}

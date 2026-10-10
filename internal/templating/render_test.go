@@ -1,6 +1,7 @@
 package templating
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -133,6 +134,10 @@ func TestFingerprintIgnoresKeyOrderAndNumberSpelling(t *testing.T) {
 	if a == fingerprint(map[string]any{"a": float64(2), "b": "x"}) {
 		t.Fatal("different documents share a fingerprint")
 	}
+	// Bodies decode numbers as json.Number; the fingerprint must not change.
+	if c := fingerprint(map[string]any{"b": "x", "a": json.Number("1.0")}); c != a {
+		t.Fatalf("json.Number fingerprint %q, want %q", c, a)
+	}
 	// Known value, so the format can't drift silently: sha256(`"x"`)[:8].
 	if got := fingerprint("x"); got != "ba2df4903a2c14e8" {
 		t.Fatalf(`fingerprint("x") = %q, want "ba2df4903a2c14e8"`, got)
@@ -161,5 +166,13 @@ func TestResolveMissingValues(t *testing.T) {
 	}
 	if v, ok := resolve("body.empty"); !ok || v != "" {
 		t.Errorf(`resolve("body.empty") = %q, %v; want "", true`, v, ok)
+	}
+}
+
+func TestRenderKeepsExactNumbersAndRendersObjectsAsJSON(t *testing.T) {
+	body := map[string]any{"id": json.Number("12345678901234567"), "n": json.Number("10000000"), "obj": map[string]any{"a": json.Number("1")}}
+	got, unresolved := Render("{body.id}-{body.n}-{body.obj}", Source{Body: body})
+	if want := `12345678901234567-10000000-{"a":1}`; got != want || len(unresolved) != 0 {
+		t.Fatalf("Render = %q, %v; want %q", got, unresolved, want)
 	}
 }

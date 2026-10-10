@@ -52,6 +52,24 @@ func TestSchemaConstraints(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "minLength counts characters, not bytes",
+			schema:  map[string]any{"type": "string", "minLength": 4, "maxLength": 4},
+			data:    decode(t, `"José"`),
+			wantErr: false,
+		},
+		{
+			name:    "integer accepts an int beyond float64 precision",
+			schema:  map[string]any{"type": "integer", "minimum": 1},
+			data:    decode(t, `12345678901234567`),
+			wantErr: false,
+		},
+		{
+			name:    "integer rejects a fraction",
+			schema:  map[string]any{"type": "integer"},
+			data:    decode(t, `1.5`),
+			wantErr: true,
+		},
+		{
 			name:    "maxLength rejects long string",
 			schema:  map[string]any{"type": "string", "maxLength": 2},
 			data:    decode(t, `"abc"`),

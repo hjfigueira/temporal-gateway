@@ -6,9 +6,10 @@ info:
     Exhaustive test spec for temporal-gateway's x-temporal parsing. Every
     action type, every documented StartWorkflowOptions field, every
     placeholder origin ({path}, {body}, {query}, {header}, {uuidv7}), every
-    enum value, env-var substitution (with and without fallback), and both
-    single-action and multi-action (fan-out) operations are represented at
-    least once. Endpoints are grouped and commented by what they are meant
+    enum value, both returnStrategy values, both configured namespaces,
+    every search attribute type, env-var substitution (with and without
+    fallback), and both single-trigger and multi-trigger (fan-out)
+    operations are represented at least once. Endpoints are grouped and commented by what they are meant
     to validate - this file is not meant to represent a realistic API.
 
 paths:
@@ -36,7 +37,10 @@ paths:
                   items:
                     type: string
       x-temporal:
+        returnStrategy: acceptPartial
+        triggers:
         - action: startWorkflow
+          namespace: default
           workflowType: OrderWorkflow
           workflowId: "order-{body.orderId}"
           taskQueue: "${ORDERS_TASK_QUEUE:-orders-task-queue}"
@@ -56,6 +60,7 @@ paths:
             source: gateway
           staticSummary: "Order workflow started via gateway"
         - action: startWorkflow
+          namespace: notifications
           workflowType: NotificationWorkflow
           workflowId: "order-{body.orderId}-notification"
           taskQueue: "${NOTIFICATIONS_TASK_QUEUE:-notifications-task-queue}"
@@ -78,7 +83,9 @@ paths:
           schema:
             type: string
       x-temporal:
+        triggers:
         - action: queryWorkflow
+          namespace: default
           workflowId: "order-{path.orderId}"
           queryType: getOrderState
       responses:
@@ -108,7 +115,9 @@ paths:
                 reason:
                   type: string
       x-temporal:
+        triggers:
         - action: signalWorkflow
+          namespace: default
           workflowId: "order-{path.orderId}"
           signalName: cancelOrder
       responses:
@@ -129,7 +138,9 @@ paths:
           schema:
             type: string
       x-temporal:
+        triggers:
         - action: getResult
+          namespace: default
           workflowId: "order-{path.orderId}"
       responses:
         "200":
@@ -175,7 +186,9 @@ paths:
                 quantity:
                   type: integer
       x-temporal:
+        triggers:
         - action: startWorkflow
+          namespace: default
           workflowType: LineItemWorkflow
           workflowId: "line-item-{uuidv7}"
           taskQueue: "${ITEMS_TASK_QUEUE}"
@@ -204,7 +217,9 @@ paths:
           schema:
             type: string
       x-temporal:
+        triggers:
         - action: startWorkflow
+          namespace: default
           workflowType: ReconciliationWorkflow
           workflowId: "reconcile-{path.orderId}"
           taskQueue: "${RECONCILIATION_TASK_QUEUE:-reconciliation-task-queue}"
@@ -212,8 +227,12 @@ paths:
           workflowIdConflictPolicy: TerminateExisting
           enableEagerStart: true
           searchAttributes:
-            OrderId: "{path.orderId}"
-            WorkflowCategory: "reconciliation"
+            - name: WorkflowCategory
+              type: keyword
+              value: reconciliation
+            - name: Recurring
+              type: bool
+              value: true
           staticSummary: "Recurring reconciliation"
           staticDetails: "Runs every 6 hours to reconcile order state with the ledger."
       responses:
@@ -248,7 +267,9 @@ paths:
                   type: object
                   additionalProperties: true
       x-temporal:
+        triggers:
         - action: startWorkflow
+          namespace: default
           workflowType: AdhocJobWorkflow
           workflowId: "adhoc-{body.jobId}-{body.customerId}"
           taskQueue: "${ADHOC_TASK_QUEUE:-adhoc-task-queue}"
@@ -269,7 +290,21 @@ paths:
           memo:
             requestedBy: "{body.customerId}"
           searchAttributes:
-            JobId: "{body.jobId}"
+            - name: JobPriority
+              type: int
+              value: 3
+            - name: JobWeight
+              type: float
+              value: 2.5
+            - name: JobDeadline
+              type: time
+              value: "2030-01-01T00:00:00Z"
+            - name: JobTags
+              type: keywordList
+              value: [adhoc, batch]
+            - name: JobLabel
+              type: string
+              value: "Ad-hoc job"
           enableEagerStart: false
           staticSummary: "Ad-hoc job"
           staticDetails: "Kitchen-sink example exercising every StartWorkflowOptions field."
@@ -282,8 +317,9 @@ paths:
           description: Ad-hoc workflow started.
 
   # --------------------------------------------------------------------
-  # 8) idReusePolicy=TerminateIfRunning, workflowIdConflictPolicy=UseExisting,
-  #    startDelay (mutually exclusive with cronSchedule, shown for contrast)
+  # 8) idReusePolicy=TerminateIfRunning (which implies conflict policy
+  #    TerminateExisting, so none is set), startDelay (mutually exclusive
+  #    with cronSchedule, shown for contrast)
   # --------------------------------------------------------------------
   /workflows/singleton/{tenantId}:
     put:
@@ -299,12 +335,13 @@ paths:
           schema:
             type: string
       x-temporal:
+        triggers:
         - action: startWorkflow
+          namespace: default
           workflowType: TenantSingletonWorkflow
           workflowId: "tenant-singleton-{path.tenantId}"
           taskQueue: "${TENANT_TASK_QUEUE:-tenant-task-queue}"
           idReusePolicy: TerminateIfRunning
-          workflowIdConflictPolicy: UseExisting
           startDelay: 2s
           workflowExecutionTimeout: 720h
       responses:
@@ -341,10 +378,14 @@ paths:
                   type: string
                   enum: [low, medium, high, critical]
       x-temporal:
+        returnStrategy: allOrNothing
+        triggers:
         - action: signalWorkflow
+          namespace: default
           workflowId: "order-{path.orderId}"
           signalName: escalationRaised
         - action: startWorkflow
+          namespace: default
           workflowType: EscalationWorkflow
           workflowId: "escalation-{path.orderId}-{uuidv7}"
           taskQueue: "${ESCALATIONS_TASK_QUEUE:-escalations-task-queue}"
@@ -353,6 +394,7 @@ paths:
             reason: "{body.reason}"
             severity: "{body.severity}"
         - action: queryWorkflow
+          namespace: default
           workflowId: "order-{path.orderId}"
           queryType: getEscalationState
       responses:
@@ -367,7 +409,9 @@ paths:
       operationId: taskQueueProbe
       summary: Query a probe workflow, exercising an env fallback of "".
       x-temporal:
+        triggers:
         - action: queryWorkflow
+          namespace: default
           workflowId: "probe-{uuidv7}"
           queryType: ping
       responses:
