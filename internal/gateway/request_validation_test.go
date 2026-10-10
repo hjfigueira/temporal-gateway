@@ -166,3 +166,17 @@ func TestDispatchHandlerValidationResponseShape(t *testing.T) {
 		t.Errorf("fields = %v, want %v (body: %s)", result.Fields, want, rec.Body.String())
 	}
 }
+
+func TestDispatchHandlerLogsValidationFailures(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	req := httptest.NewRequest(http.MethodPost, "/orders/eu", strings.NewReader(`{"orderId":"secret-value"}`))
+	ordersMux(ordersRoute(t), &recordingDispatcher{}, logger).ServeHTTP(httptest.NewRecorder(), req)
+
+	if !strings.Contains(logs.String(), "request failed validation") || !strings.Contains(logs.String(), "customerId") {
+		t.Errorf("logs = %q, want the failure and its field names", logs.String())
+	}
+	if strings.Contains(logs.String(), "secret-value") {
+		t.Errorf("logs leaked a request value: %q", logs.String())
+	}
+}

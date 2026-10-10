@@ -1,6 +1,6 @@
 # ADR-018: Retry the Temporal dial at startup instead of exiting
 
-**Superseded in part by [ADR-026](0026-serve-http-before-temporal-connects.md)**: the API server no longer waits for the dial; the retry policy itself stands.
+**Superseded in part by [ADR-023](0023-temporal-connection-options-and-concurrent-dial.md)** (namespaces are dialed concurrently, not sequentially) **and [ADR-026](0026-serve-http-before-temporal-connects.md)** (the API server no longer waits for the dial); the retry policy itself stands.
 
 **Status:** Accepted
 
@@ -37,7 +37,7 @@ gateway down.
 
 Things that are *not* retried, because no amount of waiting fixes them:
 building client options (tracing interceptor, unreadable TLS keypair),
-config/spec validation, and `ValidateNamespaces`. Those still fail fast
+config/spec validation, and `ValidateNamespaces` (now `ValidateBindings`, ADR-031). Those still fail fast
 per ADR-008.
 
 `--dry-run` always forces `maxAttempts: 1`: it's a pass/fail check for CI

@@ -17,7 +17,7 @@ Feature: OpenTelemetry tracing
     Given otel.enabled is true
     When a request is dispatched through dispatchHandler
     Then one span is started, named after the operation's operationId
-    And the span carries http.method, http.route, and operation_id attributes
+    And the span carries http.method, http.route, and temporal_gateway.operation_id attributes
 
   Scenario: Trace context propagates into the dispatched Temporal call
     Given otel.enabled is true and a request's span is active
@@ -49,6 +49,11 @@ Feature: OpenTelemetry tracing
     Given otel.sampleRatio is 0 or negative
     When telemetry.Setup configures the sampler
     Then the effective sample ratio is 1 (sample every trace)
+
+  Scenario: A request that fails validation marks its span as an error
+    Given a request that fails OpenAPI validation or JSON decoding
+    When it is answered with 4xx
+    Then the span status is Error, describing the failure
 
   Scenario: Multiple bindings in one request produce bindings_dispatched/succeeded attributes
     Given a multi-trigger operation with 2 triggers, 1 of which fails

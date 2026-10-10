@@ -9,7 +9,9 @@ info:
     enum value, both returnStrategy values, both configured namespaces,
     every search attribute type, env-var substitution (with and without
     fallback), and both single-trigger and multi-trigger (fan-out)
-    operations are represented at least once. Endpoints are grouped and commented by what they are meant
+    operations are represented at least once. Only workflowId is templated:
+    "{...}" text in memo, fairnessKey and other fields reaches Temporal
+    literally. Endpoints are grouped and commented by what they are meant
     to validate - this file is not meant to represent a realistic API.
 
 paths:
@@ -190,7 +192,7 @@ paths:
         - action: startWorkflow
           namespace: default
           workflowType: LineItemWorkflow
-          workflowId: "line-item-{uuidv7}"
+          workflowId: "line-item-{query.correlationId}-{header.X-Request-Source}-{uuidv7}"
           taskQueue: "${ITEMS_TASK_QUEUE}"
           idReusePolicy: AllowDuplicate
           workflowIdConflictPolicy: Fail

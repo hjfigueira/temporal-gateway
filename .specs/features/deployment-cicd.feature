@@ -45,8 +45,9 @@ Feature: Container image and release publishing
   Scenario: A prerelease never updates the "latest" tag
     Given a GitHub Release "v2.0.0-rc.1" is published and marked prerelease
     When the docker-release workflow runs
-    Then images are tagged "2.0.0-rc.1" (and "2.0")
-    But "latest" is not updated to point at it
+    Then images are tagged "2.0.0-rc.1" only
+    But neither "2.0" nor "latest" is updated to point at it
+    # docker/metadata-action emits only {{version}} for prerelease versions.
 
   Scenario: No extra registry secrets are required
     Given the workflow logs in to GHCR

@@ -1,5 +1,7 @@
 # ADR-029: Validate requests from the OpenAPI spec with kin-openapi
 
+**Superseded in part by [ADR-030](0030-merge-spec-files-as-raw-yaml.md)**: spec files are merged before kin-openapi parses them, so `$ref`s resolve across files; refs to other files are rejected.
+
 **Status:** Accepted. Supersedes [ADR-009](../deprecated/0009-json-schema-lite-validator-with-laravel-style-messages.md); extends [ADR-008](0008-fail-fast-validation-at-startup.md) and [ADR-012](0012-multi-file-api-spec-merge.md).
 
 **Related features:** [`request-validation.feature`](../../features/request-validation.feature)

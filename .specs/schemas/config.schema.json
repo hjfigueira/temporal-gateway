@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-gateway/.specs/schemas/config.schema.json",
+  "title": "temporal-gateway config.yml",
+  "description": "The gateway config, loaded and validated by config.Load (internal/config). Any value may use ${VAR} / ${VAR:-default}, expanded on the raw bytes before YAML parsing (ADR-011); so every non-string field here also accepts such a reference. Unknown keys are ignored by the gateway; this schema rejects them to catch typos.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["temporal", "apiSpec"],
+  "properties": {
+    "server": {
+      "description": "The API server (ADR-014, ADR-022).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": { "description": "Listen address. Empty listens on every interface.", "type": "string" },
+        "port": { "description": "Listen port.", "anyOf": [{ "$ref": "#/$defs/port" }, { "$ref": "#/$defs/envRef" }] },
+        "maxBodyBytes": {
+          "description": "Largest accepted request body, in bytes; a larger one gets 413. 0 or unset means 1 MiB.",
+          "default": 1048576,
+          "anyOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/envRef" }]
+        },
+        "requestTimeout": {
+          "description": "How long one request may spend dispatching to Temporal before it gets 504. Must be positive. The server's write timeout is this plus 5s.",
+          "default": "25s",
+          "$ref": "#/$defs/positiveDuration"
+        }
+      }
+    },
+    "temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connections"],
+      "properties": {
+        "connections": {
+          "description": "One entry per Temporal namespace the gateway dials. Namespaces must be unique (checked by config.Load; JSON Schema can't express it). Every x-temporal trigger names one of these (ADR-003).",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/connection" }
+        },
+        "reconnect": {
+          "description": "Retry policy for the startup dial (ADR-018, ADR-026). --dry-run always makes a single attempt.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "interval": { "description": "Wait between attempts. Must be positive.", "default": "5s", "$ref": "#/$defs/positiveDuration" },
+            "maxAttempts": {
+              "description": "Attempts per namespace before the gateway exits. 0 retries forever.",
+              "default": 0,
+              "anyOf": [{ "type": "integer", "minimum": 0 }, { "$ref": "#/$defs/envRef" }]
+            }
+          }
+        }
+      }
+    },
+    "apiSpec": {
+      "description": "Path(s) to the OpenAPI spec, relative to this file's directory unless absolute. Several files are merged in order (ADR-012, ADR-030).",
+      "anyOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      ]
+    },
+    "auth": {
+      "description": "Parsed and logged only; NOT enforced against requests (ADR-015).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "enum": ["none", "apiKey", "jwt"] },
+        "apiKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "header": { "type": "string" },
+            "keys": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "jwt": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": { "type": "string" },
+            "audience": { "type": "string" },
+            "jwksUrl": { "type": "string" }
+          }
+        }
+      }
+    },
+    "middlewares": {
+      "description": "Parsed and logged only; no middleware is applied (ADR-015).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "enabled": { "$ref": "#/$defs/bool" },
+          "config": { "description": "Free-form, per middleware.", "type": "object" }
+        }
+      }
+    },
+    "otel": {
+      "description": "OpenTelemetry tracing, exported via OTLP/gRPC. Export is non-blocking: an unreachable collector never stops the gateway (ADR-013).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "description": "Unset means disabled.", "default": false, "$ref": "#/$defs/bool" },
+        "serviceName": { "description": "The exported service.name.", "type": "string" },
+        "endpoint": { "description": "OTLP/gRPC collector address, e.g. localhost:4317.", "type": "string" },
+        "insecure": { "description": "Disable TLS to the collector.", "default": false, "$ref": "#/$defs/bool" },
+        "sampleRatio": {
+          "description": "Fraction of traces sampled, 0-1. A value <= 0 samples everything.",
+          "default": 1,
+          "anyOf": [{ "type": "number" }, { "$ref": "#/$defs/envRef" }]
+        }
+      }
+    },
+    "health": {
+      "description": "GET /livez and /readyz on their own port (ADR-019).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "description": "Unset means disabled.", "default": false, "$ref": "#/$defs/bool" },
+        "host": { "type": "string" },
+        "port": { "description": "Required (1-65535) when enabled, and must differ from server.port (checked by config.Load; JSON Schema can't compare the two).", "anyOf": [{ "$ref": "#/$defs/port" }, { "$ref": "#/$defs/envRef" }] }
+      },
+      "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] },
+      "then": { "required": ["port"], "properties": { "port": { "not": { "const": 0 } } } }
+    }
+  },
+  "$defs": {
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace"],
+      "properties": {
+        "namespace": { "type": "string", "minLength": 1 },
+        "host": { "description": "Temporal frontend host:port.", "type": "string" },
+        "apiKey": { "description": "API key credentials (e.g. Temporal Cloud); implies TLS. Set it from ${VAR}, never inline. Never logged.", "type": "string" },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "$ref": "#/$defs/bool" },
+            "certPath": { "description": "mTLS client certificate. Set together with keyPath.", "type": "string" },
+            "keyPath": { "description": "mTLS client key. Set together with certPath.", "type": "string" },
+            "caPath": { "description": "PEM bundle replacing the system roots.", "type": "string" },
+            "serverName": { "description": "Overrides the name the server certificate is verified against.", "type": "string" }
+          },
+          "dependentRequired": {
+            "certPath": ["keyPath"],
+            "keyPath": ["certPath"]
+          }
+        },
+        "workflows": {
+          "description": "This namespace's workflow catalog. taskQueue is the default for a startWorkflow trigger that sets none (ADR-031); signals and queries are informational, logged at startup only.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "description": "The workflow type.", "type": "string" },
+              "taskQueue": { "type": "string" },
+              "signals": { "type": "array", "items": { "type": "string" } },
+              "queries": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "bool": { "anyOf": [{ "type": "boolean" }, { "$ref": "#/$defs/envRef" }] },
+    "positiveDuration": {
+      "description": "A positive Go duration string (time.ParseDuration), e.g. \"5s\", \"2m\", or a ${VAR} reference.",
+      "type": "string",
+      "anyOf": [
+        { "pattern": "^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$" },
+        { "$ref": "#/$defs/envRef" }
+      ],
+      "not": { "description": "Zero, e.g. \"0s\".", "pattern": "^\\+?([0.]+(ns|us|µs|μs|ms|s|m|h))+$" }
+    },
+    "envRef": {
+      "description": "A ${VAR} or ${VAR:-default} reference, expanded before parsing.",
+      "type": "string",
+      "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$"
+    }
+  }
+}

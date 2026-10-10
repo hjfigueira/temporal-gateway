@@ -1,5 +1,7 @@
 # ADR-023: Concurrent namespace dial; CA bundle, server name, and API key
 
+**Superseded in part by [ADR-026](0026-serve-http-before-temporal-connects.md)**: `NewConnections` only builds the namespace table and `Connect` dials in the background; serving no longer waits for any namespace.
+
 **Status:** Accepted
 
 **Related features:** [`multi-namespace-temporal.feature`](../../features/multi-namespace-temporal.feature)

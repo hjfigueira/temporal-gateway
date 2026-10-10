@@ -176,7 +176,7 @@ func TestRunStartupFailures(t *testing.T) {
 		{name: "bad api spec", args: runArgs(gatewayFiles{temporalHost: temporalHost, spec: "paths: ["}.write(t)), wantErr: "load api spec"},
 		{name: "health port taken", args: runArgs(gatewayFiles{temporalHost: temporalHost, healthPort: busyPort}.write(t)), wantErr: "start health server"},
 		{name: "temporal unreachable", args: runArgs(gatewayFiles{temporalHost: "127.0.0.1:1"}.write(t), "-dry-run"), wantErr: "connect to temporal"},
-		{name: "spec names an unknown namespace", args: runArgs(gatewayFiles{temporalHost: temporalHost, specNS: "elsewhere"}.write(t), "-dry-run"), wantErr: "unknown temporal namespace"},
+		{name: "spec names an unknown namespace", args: runArgs(gatewayFiles{temporalHost: temporalHost, specNS: "elsewhere"}.write(t), "-dry-run"), wantErr: "has no temporal.connections entry"},
 		{name: "dial gives up while serving", args: runArgs(gatewayFiles{temporalHost: "127.0.0.1:1", apiPort: freePort(t)}.write(t)), wantErr: "connect to temporal"},
 		{name: "api port taken", args: runArgs(gatewayFiles{temporalHost: temporalHost, apiPort: busyPort}.write(t)), wantErr: "http server stopped"},
 	}

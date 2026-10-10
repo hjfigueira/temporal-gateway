@@ -74,3 +74,24 @@ func TestNotYetConnectedNamespace(t *testing.T) {
 		t.Fatalf("CheckHealth = %v, want default not connected", got)
 	}
 }
+
+func TestValidateBindingsTaskQueueFromCatalog(t *testing.T) {
+	conns := NewConnections(config.TemporalConfig{Connections: []config.TemporalConnectionConfig{{
+		Namespace: "default",
+		Workflows: []config.WorkflowDefinition{{Name: "OrderWorkflow", TaskQueue: "orders"}},
+	}}})
+	start := func(workflowType, taskQueue string) spec.TemporalBinding {
+		return spec.TemporalBinding{Action: spec.ActionStartWorkflow, Namespace: "default", WorkflowType: workflowType, TaskQueue: taskQueue}
+	}
+	apiSpec := &spec.Spec{Paths: map[string]spec.PathItem{"/x": {Post: &spec.Operation{Temporal: spec.TemporalSpec{Triggers: []spec.TemporalBinding{
+		start("OrderWorkflow", ""),                                // catalog supplies it
+		start("OtherWorkflow", "others"),                          // explicit
+		start("OtherWorkflow", ""),                                // neither
+		{Action: spec.ActionSignalWorkflow, Namespace: "default"}, // not a start
+	}}}}}}
+
+	err := ValidateBindings(apiSpec, conns)
+	if err == nil || !strings.Contains(err.Error(), "triggers[2]") || strings.Contains(err.Error(), "triggers[0]") || strings.Contains(err.Error(), "triggers[1]") || strings.Contains(err.Error(), "triggers[3]") {
+		t.Fatalf("err = %v, want only triggers[2] reported", err)
+	}
+}

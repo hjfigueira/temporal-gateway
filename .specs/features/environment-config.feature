@@ -1,9 +1,10 @@
 # See .specs/adr/active/0011-var-expansion-over-raw-config-bytes.md
 # See .specs/adr/active/0012-multi-file-api-spec-merge.md
+# See .specs/adr/active/0030-merge-spec-files-as-raw-yaml.md
 # See .specs/adr/active/0008-fail-fast-validation-at-startup.md
 # See .specs/adr/active/0027-godotenv-for-dotenv-loading.md
 # Code: internal/config/envsubst/envsubst.go, main.go (godotenv.Load),
-#       internal/config/spec_path.go, internal/spec/spec.go (merge), main.go
+#       internal/config/spec_path.go, internal/spec/spec.go (mergeDoc), main.go
 
 Feature: Environment-aware config, .env loading, and multi-file specs
   config.yml and api-spec.yaml both support "${VAR}" / "${VAR:-default}"
@@ -96,6 +97,24 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     When the specs are merged
     Then "GET /orders/{orderId}" is exactly as base.yaml defined it
 
+  Scenario: A later spec file may $ref an earlier file's components
+    Given base.yaml declares components.schemas.Order
+    And overrides.yaml redefines "POST /orders" with a body schema of $ref "#/components/schemas/Order"
+    When the specs are loaded and merged
+    Then loading succeeds and requests to "POST /orders" are validated against base.yaml's Order
+
+  Scenario: Components merge per name
+    Given base.yaml declares components.schemas Order and Customer
+    And overrides.yaml declares only components.schemas.Customer
+    When the specs are merged
+    Then Order is base.yaml's and Customer is overrides.yaml's
+
+  Scenario: A $ref to another file fails spec loading
+    Given an operation's schema is {$ref: "./schemas.yaml#/Order"}
+    When the specs are loaded
+    Then loading fails with a disallowed external reference error
+    # The merged document has no single location to resolve it from (ADR-030).
+
   Scenario: Relative apiSpec paths resolve against config.yml's directory
     Given config.yml lives in /etc/gateway/config.yml
     And apiSpec: "./api-spec.yaml"
@@ -107,7 +126,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     Given a config.yml and api-spec.yaml that are both fully valid
     And Temporal connections can be dialed
     When the gateway runs with --dry-run
-    Then it loads config, loads the spec, validates namespaces, then dials Temporal once
+    Then it loads config, loads the spec, checks every trigger against temporal.connections, then dials Temporal once
     And exits 0 without binding the HTTP server
 
   Scenario: --dry-run does not wait for an unreachable Temporal

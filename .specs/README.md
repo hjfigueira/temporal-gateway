@@ -29,6 +29,32 @@ is built the way it is, and *what* each feature is supposed to do.
 | `health-probes.feature` | `/livez` and `/readyz` on a separate health port, readiness tied to Temporal |
 | `deployment-cicd.feature` | Docker image, GHCR release publishing, CI checks |
 
+## Schemas
+
+[`schemas/`](schemas) holds JSON Schemas (draft 2020-12) for the two files
+an operator writes. Every field carries a description, its default, and the
+ADR behind it.
+
+| Schema | Describes |
+|---|---|
+| [`config.schema.json`](schemas/config.schema.json) | `config.yml`: `server`, `temporal`, `apiSpec`, `health`, `otel`, `auth`, `middlewares`. Non-string fields also accept a `${VAR}` reference, so it validates the file before expansion. |
+| [`x-temporal.schema.json`](schemas/x-temporal.schema.json) | One operation's `x-temporal` object in `api-spec.yaml`: `returnStrategy`, `triggers`, and every trigger option. |
+
+They are stricter than the gateway in one way: unknown keys are rejected
+(the gateway ignores them), to catch typos. Two checks are left to the
+code because JSON Schema can't express them: unique `temporal.connections`
+namespaces, and `health.port` differing from `server.port`. Startup
+checks that need both files (a trigger's namespace and task queue against
+`config.yml`) and `workflowId` placeholder syntax are also code-only.
+
+`schemas_test.go` keeps them in step with the code: `config.yml`,
+`api-spec.yaml` and the `tests/` fixtures must pass, and for each rule the
+loaders enforce, the schema and `config.Load` / `spec.Load` must agree.
+
+To validate `config.yml` in an editor using the YAML language server, add
+`# yaml-language-server: $schema=.specs/schemas/config.schema.json` at the
+top of the file.
+
 ## How to use this when adding or changing a feature
 
 1. **Read first.** Before adding or modifying a feature, check `adr/` (via
@@ -50,7 +76,9 @@ is built the way it is, and *what* each feature is supposed to do.
    `.feature` file gets its own, following the existing format (a header
    comment linking to the relevant `adr/*.md` files + source files, then
    `Feature:` / `Scenario:` blocks), and an entry added to the table above.
-5. **This is documentation, not executable tests.** Nothing here runs `go
+5. **Changed a `config.yml` or `x-temporal` field?** Update
+   [`schemas/`](schemas) and the agreement cases in `schemas_test.go`.
+6. **This is documentation, not executable tests.** Nothing here runs `go
    test` — these are specifications for humans and agents to read before
    changing behavior. Go tests under `internal/*/*_test.go` remain the
    actual correctness check; a `.feature` file describes *intent*, the Go

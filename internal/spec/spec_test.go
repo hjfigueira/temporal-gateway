@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -291,5 +292,74 @@ paths: {}
 func TestLoadRejectsNoPaths(t *testing.T) {
 	if _, err := Load(); err == nil {
 		t.Fatal("expected an error when Load is called with no paths")
+	}
+}
+
+func TestLoadMergesComponentsAcrossFiles(t *testing.T) {
+	base := `openapi: 3.0.3
+info: {title: Base, version: "1"}
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Order"}
+      x-temporal:
+        triggers: [{action: getResult, namespace: default, workflowId: "o"}]
+components:
+  schemas:
+    Order: {type: object, required: [orderId]}
+    Customer: {type: object}
+`
+	// Overrides the operation, references the base file's Order, and
+	// replaces only the Customer component.
+	overrides := `paths:
+  /orders:
+    post:
+      operationId: createOrderV2
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Order"}
+      x-temporal:
+        returnStrategy: allOrNothing
+        triggers: [{action: getResult, namespace: default, workflowId: "o"}]
+components:
+  schemas:
+    Customer: {type: object, required: [id]}
+`
+	s, err := loadSpecFiles(t, base, overrides)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	route := s.Routes()[0]
+	if route.Operation.OperationID != "createOrderV2" || route.Operation.Temporal.Strategy() != ReturnStrategyAllOrNothing {
+		t.Errorf("operation = %+v, want the override's", route.Operation)
+	}
+	schemas := s.doc.Components.Schemas
+	if got := schemas["Order"].Value.Required; len(got) != 1 || got[0] != "orderId" {
+		t.Errorf("Order.required = %v, want the base file's [orderId]", got)
+	}
+	if got := schemas["Customer"].Value.Required; len(got) != 1 || got[0] != "id" {
+		t.Errorf("Customer.required = %v, want the override's [id]", got)
+	}
+	body := route.OpenAPI.Operation.RequestBody.Value.Content.Get("application/json").Schema.Value
+	if len(body.Required) != 1 || body.Required[0] != "orderId" {
+		t.Errorf("override's $ref resolved to %+v, want the base file's Order", body)
+	}
+}
+
+func TestLoadRejectsRefsToOtherFiles(t *testing.T) {
+	yamlContent := specHeader + `      requestBody:
+        content:
+          application/json:
+            schema: {$ref: "./schemas.yaml#/Order"}
+      x-temporal:
+        triggers: [{action: getResult, namespace: default, workflowId: "o"}]
+`
+	if _, err := loadSpec(t, yamlContent); err == nil || !strings.Contains(err.Error(), "external reference") {
+		t.Fatalf("err = %v, want a disallowed external reference error", err)
 	}
 }

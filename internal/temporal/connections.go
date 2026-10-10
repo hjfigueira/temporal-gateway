@@ -96,7 +96,7 @@ func (c Connections) Connect(ctx context.Context, reconnect config.TemporalRecon
 // conn.Client() freely). A namespace that's configured but still connecting
 // reports Temporal's own Unavailable error, which the gateway answers with
 // 503, the same as Temporal being down. An unconfigured namespace can't
-// happen for a spec ValidateNamespaces accepted, but is reported rather
+// happen for a spec ValidateBindings accepted, but is reported rather
 // than assumed.
 func (c Connections) resolve(namespace string) (*Connection, error) {
 	conn, ok := c[namespace]
@@ -142,18 +142,29 @@ func (c Connections) CheckHealth(ctx context.Context) map[string]error {
 	return results
 }
 
-// ValidateNamespaces checks that every x-temporal binding in apiSpec names
-// a namespace present in conns, joining every problem found (rather than
+// ValidateBindings checks every x-temporal binding in apiSpec against
+// conns: its namespace must have a temporal.connections entry, and a
+// startWorkflow binding without its own taskQueue must find one in that
+// namespace's workflow catalog. Every problem is joined (rather than
 // stopping at the first) so every bad reference is reported in one pass.
-// Called once at startup, so a spec referencing an unconfigured namespace
-// fails before the server starts serving requests rather than as a
-// per-request dispatch error the first time that route is hit.
-func ValidateNamespaces(apiSpec *spec.Spec, conns Connections) error {
+// Called once at startup, so a spec that doesn't match config.yml fails
+// before the server starts serving requests rather than as a per-request
+// dispatch error the first time that route is hit.
+func ValidateBindings(apiSpec *spec.Spec, conns Connections) error {
 	var errs []error
 	for _, route := range apiSpec.Routes() {
 		for i, binding := range route.Operation.Temporal.Triggers {
-			if _, ok := conns[binding.Namespace]; !ok {
-				errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: namespace %q has no temporal.connections entry in config", route.Method, route.Path, i, binding.Namespace))
+			where := fmt.Sprintf("%s %s: x-temporal.triggers[%d]", route.Method, route.Path, i)
+			conn, ok := conns[binding.Namespace]
+			if !ok {
+				errs = append(errs, fmt.Errorf("%s: namespace %q has no temporal.connections entry in config", where, binding.Namespace))
+				continue
+			}
+			if binding.Action != spec.ActionStartWorkflow || binding.TaskQueue != "" {
+				continue
+			}
+			if _, ok := conn.Catalog.TaskQueueFor(binding.WorkflowType); !ok {
+				errs = append(errs, fmt.Errorf("%s: startWorkflow has no taskQueue, and namespace %q's workflows in config declare none for %q", where, binding.Namespace, binding.WorkflowType))
 			}
 		}
 	}

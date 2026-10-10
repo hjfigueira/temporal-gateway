@@ -1,5 +1,7 @@
 # ADR-008: Fail-fast validation at startup, not at request time
 
+**Superseded in part by [ADR-031](0031-task-queue-from-workflow-catalog.md)**: `temporal.ValidateNamespaces` is now `temporal.ValidateBindings`, which also checks that every `startWorkflow` has a task queue (its own or the catalog's); `temporal.workflows` is no longer purely informational.
+
 **Status:** Accepted
 
 **Related features:** every `.feature` file touches this to some degree;

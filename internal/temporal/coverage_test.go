@@ -120,8 +120,8 @@ func TestConnectionsHealthValidateAndClose(t *testing.T) {
 	apiSpec := &spec.Spec{Paths: map[string]spec.PathItem{"/x": {Post: &spec.Operation{Temporal: spec.TemporalSpec{Triggers: []spec.TemporalBinding{
 		{Namespace: "default"}, {Namespace: "missing"},
 	}}}}}}
-	if err := ValidateNamespaces(apiSpec, conns); err == nil || !strings.Contains(err.Error(), `"missing"`) || strings.Contains(err.Error(), `"default"`) {
-		t.Errorf("ValidateNamespaces err = %v, want only %q reported", err, "missing")
+	if err := ValidateBindings(apiSpec, conns); err == nil || !strings.Contains(err.Error(), `"missing"`) || strings.Contains(err.Error(), `"default"`) {
+		t.Errorf("ValidateBindings err = %v, want only %q reported", err, "missing")
 	}
 
 	conns.Close()

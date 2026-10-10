@@ -15,7 +15,6 @@ package spec
 
 import (
 	"fmt"
-	"net/url"
 	"os"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -193,44 +192,58 @@ type Spec struct {
 	Info    Info                `yaml:"info"`
 	Paths   map[string]PathItem `yaml:"paths"`
 
-	// doc is the same files parsed and merged by kin-openapi, which
-	// validates requests against them (see Route.OpenAPI). Nil for a Spec
+	// doc is the same merged document as parsed by kin-openapi, which
+	// validates requests against it (see Route.OpenAPI). Nil for a Spec
 	// built in code rather than by Load.
 	doc *openapi3.T
 }
 
 // Load reads each of paths, expands "${VAR}"/"${VAR:-default}" environment
-// references in each, parses it as a Spec YAML document, and merges them in
-// order into a single Spec (see Spec.merge) - later paths take precedence
-// over earlier ones for any operation they both define, so a later file can
-// extend or override an earlier one (e.g. a base spec plus an
-// environment-specific overrides file). The merged result is validated (see
-// validate.go) before being returned, so a misconfigured spec fails at
-// startup rather than on the first request that hits the bad route.
+// references in each, and merges them in order into one document (see
+// mergeDoc) - a later file can extend or override an earlier one (e.g. a
+// base spec plus an environment-specific overrides file), and may $ref the
+// earlier file's components. That one document is then decoded twice: into
+// Spec for operation ids and x-temporal (as YAML, so integers stay exact),
+// and by kin-openapi for everything OpenAPI describes. The result is
+// validated (see validate.go) before being returned, so a misconfigured spec
+// fails at startup rather than on the first request that hits the bad route.
 func Load(paths ...string) (*Spec, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("spec: no api spec paths given")
 	}
 
-	merged := &Spec{Paths: map[string]PathItem{}}
+	merged := map[string]any{}
 	for _, path := range paths {
-		s, err := loadOne(path)
+		doc, err := loadOne(path)
 		if err != nil {
 			return nil, err
 		}
-		merged.merge(s)
+		mergeDoc(merged, doc)
 	}
 
-	if err := merged.validate(); err != nil {
+	data, err := yaml.Marshal(merged)
+	if err != nil {
 		return nil, fmt.Errorf("spec: %w", err)
 	}
+	var s Spec
+	if err := yaml.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("spec: parse %v: %w", paths, err)
+	}
+	// $refs to other files aren't supported: the merged document has no
+	// single location to resolve them from, and the loader refuses them.
+	if s.doc, err = openapi3.NewLoader().LoadFromData(data); err != nil {
+		return nil, fmt.Errorf("spec: parse %v: %w", paths, err)
+	}
 
-	return merged, nil
+	if err := s.validate(); err != nil {
+		return nil, fmt.Errorf("spec: %w", err)
+	}
+	return &s, nil
 }
 
-// loadOne reads and parses a single spec file - see Load, which merges and
-// validates the result across every configured path.
-func loadOne(path string) (*Spec, error) {
+// loadOne reads, expands and parses a single spec file - see Load, which
+// merges the result across every configured path.
+func loadOne(path string) (map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("spec: read %q: %w", path, err)
@@ -241,87 +254,41 @@ func loadOne(path string) (*Spec, error) {
 		return nil, fmt.Errorf("spec: %q: %w", path, err)
 	}
 
-	var s Spec
-	if err := yaml.Unmarshal(data, &s); err != nil {
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("spec: parse %q: %w", path, err)
 	}
-
-	// The file's own location resolves any relative $ref it makes.
-	if s.doc, err = openapi3.NewLoader().LoadFromDataWithPath(data, &url.URL{Path: path}); err != nil {
-		return nil, fmt.Errorf("spec: parse %q: %w", path, err)
-	}
-
-	return &s, nil
+	return doc, nil
 }
 
-// merge folds other into s: other's OpenAPI/Info fields override s's where
-// set (non-empty), and other's paths are merged in one HTTP method at a
-// time - an operation other declares for a (path, method) s already has
-// entirely replaces it, rather than the two being combined field by field,
-// so a later spec file can cleanly supersede an earlier one's definition of
-// the same endpoint.
-func (s *Spec) merge(other *Spec) {
-	if other.OpenAPI != "" {
-		s.OpenAPI = other.OpenAPI
+// mergeDoc folds a later spec file's document into merged (ADR-012). Each
+// operation (paths.<path>.<method>), path-level field, component
+// (components.<section>.<name>) and info field the later file declares
+// replaces the earlier one whole, rather than the two being combined
+// field by field; any other top-level key is replaced outright.
+func mergeDoc(merged, doc map[string]any) {
+	for key, value := range doc {
+		switch key {
+		case "paths", "components":
+			mergeLevels(merged, key, value, 2)
+		case "info":
+			mergeLevels(merged, key, value, 1)
+		default:
+			merged[key] = value
+		}
 	}
-	s.Info.merge(other.Info)
+}
 
-	for path, item := range other.Paths {
-		s.Paths[path] = s.Paths[path].merge(item)
-	}
-
-	if s.doc == nil {
-		s.doc = other.doc
+// mergeLevels sets dst[key] = value, except that while depth > 0 and both
+// sides are mappings it merges them key by key, one level deeper each time.
+func mergeLevels(dst map[string]any, key string, value any, depth int) {
+	src, srcOK := value.(map[string]any)
+	existing, dstOK := dst[key].(map[string]any)
+	if depth == 0 || !srcOK || !dstOK {
+		dst[key] = value
 		return
 	}
-	// Same operation-granularity override as above. Each file's $refs are
-	// already resolved into its own operations, so components need no merge.
-	for path, item := range other.doc.Paths.Map() {
-		existing := s.doc.Paths.Value(path)
-		if existing == nil {
-			s.doc.Paths.Set(path, item)
-			continue
-		}
-		if len(item.Parameters) > 0 {
-			existing.Parameters = item.Parameters
-		}
-		for method, op := range item.Operations() {
-			existing.SetOperation(method, op)
-		}
-	}
-}
-
-// merge returns i with every method other sets overriding i's own - see
-// Spec.merge.
-func (i PathItem) merge(other PathItem) PathItem {
-	if other.Get != nil {
-		i.Get = other.Get
-	}
-	if other.Post != nil {
-		i.Post = other.Post
-	}
-	if other.Put != nil {
-		i.Put = other.Put
-	}
-	if other.Patch != nil {
-		i.Patch = other.Patch
-	}
-	if other.Delete != nil {
-		i.Delete = other.Delete
-	}
-	return i
-}
-
-// merge overwrites i's fields with any other sets (non-empty) - see
-// Spec.merge.
-func (i *Info) merge(other Info) {
-	if other.Title != "" {
-		i.Title = other.Title
-	}
-	if other.Version != "" {
-		i.Version = other.Version
-	}
-	if other.Description != "" {
-		i.Description = other.Description
+	for k, v := range src {
+		mergeLevels(existing, k, v, depth-1)
 	}
 }

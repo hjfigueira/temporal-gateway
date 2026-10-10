@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/temporal-gateway/.specs/schemas/x-temporal.schema.json",
+  "title": "x-temporal",
+  "description": "The x-temporal extension on an api-spec.yaml operation: the Temporal actions one HTTP call dispatches (triggers) and how their outcomes combine into one response (returnStrategy). Validated at startup by spec.Load (internal/spec/validation.go) and temporal.ValidateBindings. String values may use ${VAR} / ${VAR:-default}, expanded before parsing (ADR-011). Unknown keys are ignored by the gateway; this schema rejects them to catch typos. See ADR-001, ADR-002.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["triggers"],
+  "properties": {
+    "returnStrategy": {
+      "description": "How a multi-trigger operation's HTTP response is derived from its triggers' outcomes. acceptPartial: a genuine mix is 207 Multi-Status, a uniform outcome gets an ordinary status. allOrNothing: anything short of every trigger succeeding is 409 Conflict. No effect on a single-trigger operation (ADR-002).",
+      "enum": ["acceptPartial", "allOrNothing"],
+      "default": "acceptPartial"
+    },
+    "triggers": {
+      "description": "The Temporal actions this operation dispatches, concurrently. Every trigger is dispatched even if another fails.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/trigger" }
+    }
+  },
+  "$defs": {
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "namespace", "workflowId"],
+      "properties": {
+        "action": {
+          "description": "Which Temporal call this trigger makes.",
+          "enum": ["startWorkflow", "signalWorkflow", "queryWorkflow", "cancelWorkflow", "terminateWorkflow", "getResult"]
+        },
+        "namespace": {
+          "description": "The temporal.connections entry in config.yml this trigger targets. Never inferred; checked against config.yml at startup (ADR-003).",
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowId": {
+          "description": "The target workflow ID. The only templated field: {path.X}, {query.X}, {header.X}, {body.a.b[0]}, {uuidv7}, {fingerprint(ref)}. Placeholders are checked at startup; one a request can't satisfy fails that request with 422 (ADR-004, ADR-020, ADR-025).",
+          "type": "string",
+          "minLength": 1
+        },
+        "signalName": {
+          "description": "signalWorkflow: the signal to send. The request body is its input.",
+          "type": "string",
+          "minLength": 1
+        },
+        "queryType": {
+          "description": "queryWorkflow: the query to run. The request body, if any, is its argument; the result is returned as-is.",
+          "type": "string",
+          "minLength": 1
+        },
+        "workflowType": {
+          "description": "startWorkflow: the workflow type to start. The request body, if any, is its input.",
+          "type": "string",
+          "minLength": 1
+        },
+        "taskQueue": {
+          "description": "startWorkflow: the task queue. Optional when the namespace's temporal.connections[].workflows entry in config.yml declares one for workflowType; an explicit value always wins (ADR-031). Neither fails startup.",
+          "type": "string",
+          "minLength": 1
+        },
+        "idReusePolicy": {
+          "description": "startWorkflow: Temporal's WorkflowIdReusePolicy. TerminateIfRunning is mapped to AllowDuplicate + conflict policy TerminateExisting, so it can't be combined with workflowIdConflictPolicy (ADR-006).",
+          "enum": ["AllowDuplicate", "AllowDuplicateFailedOnly", "RejectDuplicate", "TerminateIfRunning"]
+        },
+        "workflowIdConflictPolicy": {
+          "description": "startWorkflow: Temporal's WorkflowIdConflictPolicy, for when a run with this ID is already running.",
+          "enum": ["Fail", "UseExisting", "TerminateExisting"]
+        },
+        "workflowExecutionErrorWhenAlreadyStarted": {
+          "description": "startWorkflow: return an error instead of attaching to an existing run.",
+          "type": "boolean",
+          "default": false
+        },
+        "workflowExecutionTimeout": { "$ref": "#/$defs/duration", "description": "startWorkflow: total time across retries and continue-as-new." },
+        "workflowRunTimeout": { "$ref": "#/$defs/duration", "description": "startWorkflow: time for a single run." },
+        "workflowTaskTimeout": { "$ref": "#/$defs/duration", "description": "startWorkflow: time for a single workflow task." },
+        "startDelay": { "$ref": "#/$defs/duration", "description": "startWorkflow: delay before the first workflow task. Can't be combined with cronSchedule." },
+        "cronSchedule": {
+          "description": "startWorkflow: cron schedule for a recurring workflow. Can't be combined with startDelay.",
+          "type": "string",
+          "minLength": 1
+        },
+        "retryPolicy": {
+          "description": "startWorkflow: mirrors go.temporal.io/sdk/temporal.RetryPolicy.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "initialInterval": { "$ref": "#/$defs/duration" },
+            "backoffCoefficient": { "type": "number" },
+            "maximumInterval": { "$ref": "#/$defs/duration" },
+            "maximumAttempts": { "type": "integer", "minimum": -2147483648, "maximum": 2147483647 },
+            "nonRetryableErrorTypes": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "memo": {
+          "description": "startWorkflow: memo attached to the run, sent as-is. Not templated: \"{...}\" text is sent literally.",
+          "type": "object"
+        },
+        "searchAttributes": {
+          "description": "startWorkflow: typed search attributes. Each value must match its declared type (ADR-007).",
+          "type": "array",
+          "items": { "$ref": "#/$defs/searchAttribute" }
+        },
+        "enableEagerStart": {
+          "description": "startWorkflow: request eager execution on a local worker.",
+          "type": "boolean",
+          "default": false
+        },
+        "staticSummary": { "description": "startWorkflow: single-line summary shown in the Temporal UI.", "type": "string" },
+        "staticDetails": { "description": "startWorkflow: longer details shown in the Temporal UI.", "type": "string" },
+        "priority": {
+          "description": "startWorkflow: mirrors go.temporal.io/sdk/temporal.Priority.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "priorityKey": { "type": "integer" },
+            "fairnessKey": { "type": "string" },
+            "fairnessWeight": { "type": "number" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "startWorkflow" } }, "required": ["action"] },
+          "then": { "required": ["workflowType"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "signalWorkflow" } }, "required": ["action"] },
+          "then": { "required": ["signalName"] }
+        },
+        {
+          "if": { "properties": { "action": { "const": "queryWorkflow" } }, "required": ["action"] },
+          "then": { "required": ["queryType"] }
+        },
+        {
+          "if": { "properties": { "idReusePolicy": { "const": "TerminateIfRunning" } }, "required": ["idReusePolicy"] },
+          "then": { "not": { "required": ["workflowIdConflictPolicy"] } }
+        },
+        {
+          "not": { "required": ["cronSchedule", "startDelay"] }
+        }
+      ]
+    },
+    "duration": {
+      "description": "A Go duration string, parsed with time.ParseDuration: e.g. \"30s\", \"5m\", \"1h30m\", \"500ms\".",
+      "type": "string",
+      "pattern": "^[-+]?(0|(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"
+    },
+    "searchAttribute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "value"],
+      "properties": {
+        "name": { "description": "The search attribute's name, registered on the Temporal server with a matching type.", "type": "string", "minLength": 1 },
+        "type": { "enum": ["string", "keyword", "bool", "int", "float", "time", "keywordList"] },
+        "value": { "description": "Shape depends on type." }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "enum": ["string", "keyword"] } } }, "then": { "properties": { "value": { "type": "string" } } } },
+        { "if": { "properties": { "type": { "const": "bool" } } }, "then": { "properties": { "value": { "type": "boolean" } } } },
+        { "if": { "properties": { "type": { "const": "int" } } }, "then": { "properties": { "value": { "type": "integer" } } } },
+        { "if": { "properties": { "type": { "const": "float" } } }, "then": { "properties": { "value": { "type": "number" } } } },
+        {
+          "if": { "properties": { "type": { "const": "time" } } },
+          "then": { "properties": { "value": { "description": "An RFC3339 timestamp.", "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$" } } }
+        },
+        { "if": { "properties": { "type": { "const": "keywordList" } } }, "then": { "properties": { "value": { "type": "array", "items": { "type": "string" } } } } }
+      ]
+    }
+  }
+}

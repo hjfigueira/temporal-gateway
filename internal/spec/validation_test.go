@@ -191,29 +191,13 @@ func TestValidateAcceptsValidSearchAttributes(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsMissingTaskQueue(t *testing.T) {
-	yamlContent := specHeader + `      x-temporal:
-        triggers:
-        - action: startWorkflow
-          workflowType: WidgetWorkflow
-          workflowId: "widget-1"
-`
-	_, err := loadSpec(t, yamlContent)
-	if err == nil {
-		t.Fatal("expected an error for a startWorkflow binding with no taskQueue")
-	}
-	if !strings.Contains(err.Error(), "taskQueue") {
-		t.Errorf("error %q does not mention the missing taskQueue", err.Error())
-	}
-}
-
 func TestValidateReturnsAllErrorsAtOnce(t *testing.T) {
 	// Two independent problems on two different bindings: neither should
 	// mask the other.
 	yamlContent := specHeader + `      x-temporal:
         triggers:
         - action: startWorkflow
-          workflowType: WidgetWorkflow
+          taskQueue: widgets
           workflowId: "widget-1"
         - action: signalWorkflow
           workflowId: "widget-1"
@@ -223,7 +207,7 @@ func TestValidateReturnsAllErrorsAtOnce(t *testing.T) {
 		t.Fatal("expected an error")
 	}
 
-	wantSubstrings := []string{"taskQueue", "signalName"}
+	wantSubstrings := []string{"workflowType", "signalName"}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing expected substring %q; validation should report every problem, not just the first", err.Error(), want)

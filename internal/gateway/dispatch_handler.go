@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -129,6 +131,13 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 
 		if fields := validateRequest(ctx, route.OpenAPI, r, raw, pathParams); fields != nil {
 			span.SetStatus(codes.Error, string(response.StatusValidationFailed))
+			// Field names only: the values may be sensitive.
+			requestLogger.Info("request failed validation",
+				"operation_id", route.Operation.OperationID,
+				"method", route.Method,
+				"path", route.Path,
+				"fields", slices.Sorted(maps.Keys(fields)),
+			)
 			issues := 0
 			for _, messages := range fields {
 				issues += len(messages)

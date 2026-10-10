@@ -15,6 +15,12 @@ Feature: Request validation
   Background:
     Given an operation declares parameters and a requestBody with an application/json schema
 
+  Scenario: A validation failure is logged with field names only
+    Given a request fails validation on "customerId"
+    When the 422 is written
+    Then an INFO log names the operation, method, path, and the failing fields
+    And no request values appear in the log
+
   Scenario: A valid request passes through to dispatch
     Given the schema requires "orderId" and "customerId", both strings
     And the request body has both fields as strings

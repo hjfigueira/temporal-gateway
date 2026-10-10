@@ -67,8 +67,11 @@ Feature: Multi-trigger dispatch and returnStrategy
   Scenario: Every trigger's own result is always present in the response
     Given a multi-trigger operation under either returnStrategy
     When the operation is dispatched
-    Then the response's "results" array has one item per trigger
-    And each item identifies which workflow/action it is about
+    Then the response's "results" array has one item per trigger, in trigger order
+    And each failed item's message names its workflow type (or action) and workflowId
+    And a successful start/signal/cancel/terminate item carries its workflowId
+    # A successful queryWorkflow/getResult item is the raw result (ADR-010),
+    # identified by its position in the list.
     # So the caller can tell exactly which trigger(s) succeeded or failed
     # Regardless of which single top-level status/HTTP code was chosen
 

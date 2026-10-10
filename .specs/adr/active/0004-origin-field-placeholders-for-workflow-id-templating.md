@@ -1,6 +1,6 @@
 # ADR-004: `{origin.field}` placeholders for workflow ID templating
 
-**Superseded in part by [ADR-020](0020-unresolved-workflow-id-placeholders-are-rejected.md)** — unresolved placeholders are now rejected (422), not left literal.
+**Superseded in part by [ADR-020](0020-unresolved-workflow-id-placeholders-are-rejected.md)** — unresolved placeholders are now rejected (422), not left literal — **and [ADR-028](0028-exact-json-numbers-in-request-bodies.md)** — numbers render with their exact digits and objects/arrays as compact JSON, not via `fmt.Sprint`. Only `workflowId` is rendered; other `x-temporal` string fields (e.g. `memo`) are sent to Temporal literally.
 
 **Status:** Accepted
 

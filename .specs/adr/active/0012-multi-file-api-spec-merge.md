@@ -1,5 +1,7 @@
 # ADR-012: Multi-file API spec merge, operation-granularity override
 
+**Superseded in part by [ADR-030](0030-merge-spec-files-as-raw-yaml.md)**: files are merged as raw YAML by `mergeDoc` (not `Spec.merge`), components merge per name, and an `info` field replaces the earlier one even when empty. The operation-granularity rule below stands.
+
 **Status:** Accepted
 
 **Related features:** [`environment-config.feature`](../../features/environment-config.feature)

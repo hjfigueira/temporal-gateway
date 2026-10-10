@@ -142,7 +142,10 @@ apiSpec: "./api-spec.yaml"
 - **`temporal.connections`** - one entry per Temporal namespace the gateway should dial
   (all dialed concurrently). At least one is required, each `namespace` must be unique,
   and every `x-temporal.triggers` entry in the API spec must name a `namespace` present
-  here (checked at startup, not at request time). TLS options: `tls.enabled`, an
+  here (checked at startup, not at request time). An entry's optional `workflows` list
+  (`name`, `taskQueue`, plus informational `signals`/`queries`) supplies the default
+  task queue for a `startWorkflow` trigger that sets none; a trigger with neither
+  fails startup. TLS options: `tls.enabled`, an
   optional mTLS keypair `tls.certPath` + `tls.keyPath` (both or neither), `tls.caPath`
   (a PEM bundle for private-CA clusters) and `tls.serverName`. `apiKey` authenticates
   with an API key (e.g. Temporal Cloud) and implies TLS; set it from an environment
@@ -170,11 +173,17 @@ apiSpec: "./api-spec.yaml"
   if not absolute. Also accepts a list of paths (`apiSpec: ["./base.yaml",
   "./overrides.yaml"]`), which are loaded and merged into a single spec, in order. A
   later file's operation (method + path) replaces an earlier file's definition of that
-  same operation entirely; operations that only appear in one file are unaffected. This
+  same operation entirely; operations that only appear in one file are unaffected.
+  Components merge per name, so a later file can `$ref` an earlier file's components
+  (`$ref`s to other files are not supported). This
   is useful for splitting a large spec across files, or layering an environment-specific
   overrides file on top of a shared base.
 - Any scalar value in this file may use `${VAR}` or `${VAR:-default}`; a reference
   without a default fails config loading if the variable is unset.
+
+Every field above is described in
+[`.specs/schemas/config.schema.json`](.specs/schemas/config.schema.json), and every
+`x-temporal` option in [`.specs/schemas/x-temporal.schema.json`](.specs/schemas/x-temporal.schema.json).
 
 ## Health probes
 
@@ -256,7 +265,7 @@ used to summarize them.
 
 | Action              | Required fields                    | What it does                                   |
 |---------------------|-------------------------------------|-------------------------------------------------|
-| `startWorkflow`     | `workflowType`, `taskQueue`         | Starts a workflow (see options below)          |
+| `startWorkflow`     | `workflowType`, `taskQueue`¹        | Starts a workflow (see options below)          |
 | `signalWorkflow`    | `signalName`                        | Sends a signal                                 |
 | `queryWorkflow`     | `queryType`                         | Runs a query, returns its result as-is         |
 | `cancelWorkflow`    | -                                    | Requests cancellation                          |
@@ -265,10 +274,13 @@ used to summarize them.
 
 Every trigger, regardless of action, requires `namespace` and `workflowId`.
 
+¹ Optional when the namespace's `workflows` entry in `config.yml` declares a
+`taskQueue` for that `workflowType`.
+
 ### `workflowId` templating
 
-Any `x-temporal.triggers` string field may reference incoming request data via
-`{origin.field}` placeholders:
+A trigger's `workflowId` may reference incoming request data via `{origin.field}`
+placeholders (other fields, such as `memo`, are sent literally):
 
 - `{path.orderId}` - a path parameter
 - `{body.customerId}` - a field from the JSON body

@@ -15,7 +15,7 @@ exists to tell orchestrators whether to send traffic.
 ## Decision
 
 - The API server binds as soon as config and spec are loaded and
-  validated. `ValidateNamespaces` needs only config, so it now runs
+  validated. `ValidateNamespaces` (now `ValidateBindings`, ADR-031) needs only config, so it now runs
   *before* any dial.
 - `temporal.NewConnections` only builds the namespace table. `Connect`
   dials every namespace concurrently in the background, with the same

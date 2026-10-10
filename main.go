@@ -106,10 +106,10 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 	// Closes every client dialed by the time run returns.
 	defer connections.Close()
 
-	// Needs only config.yml's namespace names, so a bad reference fails
-	// startup even while Temporal is unreachable.
-	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
-		return fmt.Errorf("api spec references unknown temporal namespace: %w", err)
+	// Needs only config.yml (namespaces, workflow catalogs), so a bad
+	// reference fails startup even while Temporal is unreachable.
+	if err := temporal.ValidateBindings(apiSpec, connections); err != nil {
+		return fmt.Errorf("api spec doesn't match temporal config: %w", err)
 	}
 
 	if flags.dryRun {

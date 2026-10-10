@@ -4,6 +4,7 @@
 #     .specs/adr/active/0026-serve-http-before-temporal-connects.md
 # Code: internal/config/temporal.go, internal/temporal/connections.go,
 #       internal/temporal/client.go, internal/temporal/catalog.go
+# See .specs/adr/active/0031-task-queue-from-workflow-catalog.md
 
 Feature: Multi-namespace Temporal connections
   A single gateway process can serve routes against several Temporal
@@ -116,8 +117,16 @@ Feature: Multi-namespace Temporal connections
     When the gateway starts
     Then startup fails before the HTTP server binds
     And the error names the operation, the trigger index, and "payments"
-    # This is checked once at startup (temporal.ValidateNamespaces), not
+    # This is checked once at startup (temporal.ValidateBindings), not
     # rediscovered as a per-request dispatch error on first use of the route.
+
+  Scenario: A startWorkflow with no task queue anywhere fails at startup
+    Given a startWorkflow trigger for "OrderWorkflow" in namespace "default" without its own taskQueue
+    And temporal.connections["default"].workflows declares no taskQueue for "OrderWorkflow"
+    When the gateway starts
+    Then startup fails before the HTTP server binds
+    And the error names the operation, the trigger index, "default", and "OrderWorkflow"
+    # temporal.ValidateBindings - see ADR-031.
 
   Scenario: A workflow catalog entry only supplies a default task queue
     Given temporal.connections["default"].workflows includes a workflow named "OrderWorkflow" with taskQueue "orders-task-queue"
@@ -127,7 +136,7 @@ Feature: Multi-namespace Temporal connections
     But an explicit taskQueue on the trigger always takes precedence over the catalog
 
   Scenario: An unknown workflow/signal/query in the catalog is not cross-checked
-    Given temporal.workflows documents signals/queries informationally only
+    Given temporal.workflows' signals/queries are informational only (logged at startup)
     When a trigger addresses a workflow, signal, or query not listed there
     Then this is not caught at startup
     And surfaces only as an ordinary Temporal error at request time

@@ -19,7 +19,7 @@ map (`internal/temporal/connections.go`). Every `x-temporal.triggers` entry
 route, a default, or the workflow type. The mapping is validated at
 startup: every namespace a trigger references must have a matching
 `temporal.connections` entry, or the gateway refuses to start
-(`temporal.ValidateNamespaces`).
+(`temporal.ValidateNamespaces`, now `temporal.ValidateBindings` - ADR-031).
 
 ## Consequences
 

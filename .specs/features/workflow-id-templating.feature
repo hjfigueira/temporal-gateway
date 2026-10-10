@@ -6,8 +6,7 @@
 #       (validateWorkflowIDTemplate), internal/gateway/dispatch_handler.go
 
 Feature: Workflow ID templating
-  Any x-temporal string field (chiefly workflowId) may embed "{origin.field}"
-  placeholders, resolved per request from the incoming HTTP call: path,
+  A trigger's workflowId may embed "{origin.field}" placeholders, resolved per request from the incoming HTTP call: path,
   body, query, or header (body paths may nest: "{body.items[2].sku}") - plus
   the reserved "{uuidv7}" keyword, which needs no origin and generates a
   fresh UUIDv7 per occurrence, and "{fingerprint(ref)}", a stable hash of
@@ -71,7 +70,8 @@ Feature: Workflow ID templating
     Given workflowId contains "{cookie.sessionId}"
     When the API spec is loaded
     Then loading fails naming the unknown origin "cookie"
-    # Only path/body/query/header (case-insensitive) and uuidv7 are valid.
+    # Only path/body/query/header (case-insensitive), uuidv7, and
+    # fingerprint(...) are valid.
 
   Scenario: A path placeholder must name one of the route's path parameters
     Given the route "/orders/{orderId}" and workflowId "order-{path.id}"
@@ -114,6 +114,11 @@ Feature: Workflow ID templating
     When the template is rendered
     Then only the third item affects the fingerprint
     And path, query, or header values can be fingerprinted the same way
+
+  Scenario: Only workflowId is templated
+    Given a startWorkflow trigger with memo {"requestedBy": "{body.customerId}"}
+    When the trigger dispatches
+    Then the memo value sent to Temporal is the literal text "{body.customerId}"
 
   Scenario: A bare {body} fails spec loading
     Given workflowId is "order-{body}"

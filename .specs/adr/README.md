@@ -50,6 +50,8 @@ which.
 | [0027](active/0027-godotenv-for-dotenv-loading.md) | Load `.env` with `joho/godotenv`, not a hand-rolled parser |
 | [0028](active/0028-exact-json-numbers-in-request-bodies.md) | Exact JSON numbers in request bodies |
 | [0029](active/0029-validate-requests-with-kin-openapi.md) | Validate requests from the OpenAPI spec with kin-openapi |
+| [0030](active/0030-merge-spec-files-as-raw-yaml.md) | Spec files are merged as raw YAML before parsing |
+| [0031](active/0031-task-queue-from-workflow-catalog.md) | A startWorkflow's task queue may come from the workflow catalog |
 
 ## Adding a new decision
 

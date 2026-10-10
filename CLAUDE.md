@@ -35,6 +35,9 @@ decision:**
 3. If it's a genuinely new feature area with no existing `.feature` file,
    create one following the existing format and add it to the table in
    `.specs/README.md`.
+4. If it adds, removes or changes a `config.yml` or `x-temporal` field or
+   rule, update `.specs/schemas/` and the agreement cases in
+   `schemas_test.go` (it fails when a schema and the loader disagree).
 
 Do not skip this because a change looks small — the ADRs exist specifically
 to prevent a future change (yours or someone else's) from accidentally

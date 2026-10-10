@@ -153,7 +153,7 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 }
 
 // validateStartWorkflowBinding checks the fields that only apply to
-// ActionStartWorkflow: the required workflowType/taskQueue, the ID
+// ActionStartWorkflow: the required workflowType, the ID
 // reuse/conflict policies, the cronSchedule/startDelay/retryPolicy/timeout
 // durations, and any declared searchAttributes.
 func validateStartWorkflowBinding(method, path string, i int, t TemporalBinding) []error {
@@ -161,9 +161,6 @@ func validateStartWorkflowBinding(method, path string, i int, t TemporalBinding)
 
 	if t.WorkflowType == "" {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: startWorkflow requires workflowType", method, path, i))
-	}
-	if t.TaskQueue == "" {
-		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: startWorkflow requires taskQueue", method, path, i))
 	}
 	if !validIDReusePolicies[t.IDReusePolicy] {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: unknown idReusePolicy %q", method, path, i, t.IDReusePolicy))
@@ -212,6 +209,9 @@ func validateStartWorkflowBinding(method, path string, i int, t TemporalBinding)
 		}
 	}
 
+	// A missing taskQueue can come from the namespace's workflow catalog in
+	// config.yml, which this package can't see; temporal.ValidateBindings
+	// checks it at startup.
 	return errs
 }
 
