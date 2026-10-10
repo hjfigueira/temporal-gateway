@@ -523,8 +523,8 @@ func TestDispatchHandlerDoesNotLeakRawTemporalErrors(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502 (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body: %s)", rec.Code, rec.Body.String())
 	}
 	if body := rec.Body.String(); strings.Contains(body, "10.0.0.7") || strings.Contains(body, "payments-prod") {
 		t.Errorf("response leaks the raw Temporal error: %s", body)

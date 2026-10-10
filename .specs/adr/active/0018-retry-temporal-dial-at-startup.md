@@ -1,5 +1,7 @@
 # ADR-018: Retry the Temporal dial at startup instead of exiting
 
+**Superseded in part by [ADR-026](0026-serve-http-before-temporal-connects.md)**: the API server no longer waits for the dial; the retry policy itself stands.
+
 **Status:** Accepted
 
 **Related features:**

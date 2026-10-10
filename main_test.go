@@ -73,6 +73,7 @@ type gatewayFiles struct {
 	healthPort   int // 0 disables the probe server
 	otel         string
 	specNS       string // namespace the spec's trigger targets
+	unlimited    bool   // retry the Temporal dial forever (default: 1 attempt)
 	spec         string // overrides the whole spec when set
 }
 
@@ -85,6 +86,10 @@ func (g gatewayFiles) write(t *testing.T) string {
 	if g.specNS == "" {
 		g.specNS = "default"
 	}
+	maxAttempts := 1
+	if g.unlimited {
+		maxAttempts = 0
+	}
 	healthCfg := "{enabled: false}"
 	if g.healthPort != 0 {
 		healthCfg = fmt.Sprintf("{enabled: true, host: 127.0.0.1, port: %d}", g.healthPort)
@@ -94,13 +99,13 @@ health: %s
 otel: %s
 middlewares: [{name: logging, enabled: true}]
 temporal:
-  reconnect: {maxAttempts: 1}
+  reconnect: {maxAttempts: %d, interval: 50ms}
   connections:
     - namespace: default
       host: %q
       workflows: [{name: OrderWorkflow, taskQueue: orders}]
 apiSpec: ./spec.yaml
-`, g.apiPort, healthCfg, g.otel, g.temporalHost)
+`, g.apiPort, healthCfg, g.otel, maxAttempts, g.temporalHost)
 	spec := g.spec
 	if spec == "" {
 		spec = fmt.Sprintf(`openapi: 3.0.3
@@ -172,6 +177,7 @@ func TestRunStartupFailures(t *testing.T) {
 		{name: "health port taken", args: runArgs(gatewayFiles{temporalHost: temporalHost, healthPort: busyPort}.write(t)), wantErr: "start health server"},
 		{name: "temporal unreachable", args: runArgs(gatewayFiles{temporalHost: "127.0.0.1:1"}.write(t), "-dry-run"), wantErr: "connect to temporal"},
 		{name: "spec names an unknown namespace", args: runArgs(gatewayFiles{temporalHost: temporalHost, specNS: "elsewhere"}.write(t), "-dry-run"), wantErr: "unknown temporal namespace"},
+		{name: "dial gives up while serving", args: runArgs(gatewayFiles{temporalHost: "127.0.0.1:1", apiPort: freePort(t)}.write(t)), wantErr: "connect to temporal"},
 		{name: "api port taken", args: runArgs(gatewayFiles{temporalHost: temporalHost, apiPort: busyPort}.write(t)), wantErr: "http server stopped"},
 	}
 	for _, tt := range tests {
@@ -289,5 +295,41 @@ func TestMainExitCodes(t *testing.T) {
 	main()
 	if code != -1 {
 		t.Fatalf("successful run: exit called with %d, want no exit", code)
+	}
+}
+
+// TestRunServesBeforeTemporalConnects: with Temporal unreachable (and
+// retried forever), the API is already up and answers 503, readiness says
+// which namespace is pending, and a shutdown signal still exits cleanly.
+func TestRunServesBeforeTemporalConnects(t *testing.T) {
+	apiPort, healthPort := freePort(t), freePort(t)
+	cfg := gatewayFiles{temporalHost: "127.0.0.1:1", apiPort: apiPort, healthPort: healthPort, unlimited: true}.write(t)
+	logger, _ := newLogger()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, runArgs(cfg), logger) }()
+
+	waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/livez", healthPort), http.StatusOK)
+	waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/orders/o1/result", apiPort), http.StatusServiceUnavailable)
+
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/readyz", healthPort))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "not connected yet") {
+		t.Fatalf("/readyz = %d %s, want 503 naming the pending namespace", resp.StatusCode, body)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run after shutdown signal: %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return after cancellation")
 	}
 }

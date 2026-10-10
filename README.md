@@ -149,10 +149,13 @@ apiSpec: "./api-spec.yaml"
   startup, the gateway logs a warning and retries the dial every `interval` (a Go
   duration, default `5s`) instead of exiting. `maxAttempts` caps the number of dials
   per namespace (`0`, the default, retries until it connects or the process is
-  stopped). The HTTP server only starts once every namespace is connected. Once
-  running, the Temporal SDK reconnects on its own if Temporal goes away; requests
-  made while it's down fail with a Temporal error instead of crashing the gateway.
-  `--dry-run` ignores this and makes a single attempt.
+  stopped; if the attempts run out, the gateway exits). Dialing happens in the
+  background: the HTTP server starts right away, and a namespace's routes answer
+  **503** (`UNAVAILABLE`) until that namespace connects, while `/readyz` reports
+  which namespaces are still pending. Once running, the Temporal SDK reconnects on
+  its own if Temporal goes away; requests made while it's down get the same 503
+  instead of crashing the gateway. `--dry-run` ignores this and makes a single,
+  synchronous attempt.
 - **`health`** - liveness and readiness probes, served on their own `host:port`
   (separate from `server`, so they can't collide with an API spec route). The probe
   server starts before Temporal is dialed. See [Health probes](#health-probes).
@@ -176,7 +179,7 @@ apiSpec: "./api-spec.yaml"
 | Endpoint      | Passes (200) when                                                     | Fails (503) when |
 |---------------|-----------------------------------------------------------------------|------------------|
 | `GET /livez`  | the process is up and answering HTTP                                  | never - no answer at all means the gateway is wedged |
-| `GET /readyz` | every Temporal namespace is connected **and** answers a health check  | still waiting for Temporal at startup, any namespace fails its health check (2s timeout), or the gateway is shutting down |
+| `GET /readyz` | every Temporal namespace is connected **and** answers a health check  | any namespace isn't connected yet (reported per namespace as `"not connected yet"`), any namespace fails its health check (2s timeout), or the gateway is shutting down |
 
 `/readyz` returns which namespace failed and why, e.g.
 `{"status":"not_ready","checks":{"default":"ok","notifications":"health check error: ..."}}`.
@@ -269,7 +272,13 @@ Any `x-temporal.triggers` string field may reference incoming request data via
 - `{body.customerId}` - a field from the JSON body
 - `{query.filter}` - a query string parameter
 - `{header.X-Request-Id}` - a request header
+- `{body.customer.id}`, `{body.items[2].sku}` - nested body fields and array elements
 - `{uuidv7}` - generates a fresh UUIDv7 (no origin needed)
+- `{fingerprint(body)}`, `{fingerprint(body.items[2])}` - a stable 16-hex-char hash
+  (SHA-256 of the canonical JSON) of the whole body or any referenced value; the same
+  content always gives the same ID, whatever its key order, so it works well as a
+  deduplication key. Fingerprint a stable part of the body if it carries volatile
+  fields like timestamps.
 
 Example: `"order-{path.orderId}-{body.customerId}"`.
 
@@ -308,6 +317,8 @@ gateway before it starts serving traffic.
 - The JSON body is validated against the operation's `requestBody` schema before
   dispatch; a failure returns **422** with a structured error naming every invalid
   field, not just the first.
+- A route whose Temporal namespace isn't connected (yet), or a Temporal that reports
+  itself unavailable, returns **503** (`UNAVAILABLE`).
 - A body over `server.maxBodyBytes` returns **413**; a dispatch exceeding
   `server.requestTimeout` returns **504** (`TIMEOUT`).
 - Temporal errors are reported with a fixed message per class (not found, already

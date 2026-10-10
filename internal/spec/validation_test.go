@@ -292,8 +292,8 @@ func TestValidateWorkflowIDPlaceholders(t *testing.T) {
 		{name: "every origin and uuidv7", path: "/orders/{orderId}", workflowID: "o-{path.orderId}-{body.a}-{query.b}-{HEADER.X-C}-{UUIDv7}"},
 		{name: "unknown path param", path: "/orders/{orderId}", workflowID: "o-{path.id}", wantErr: "names no path parameter"},
 		{name: "typo'd origin", path: "/orders", workflowID: "o-{paht.id}", wantErr: `unknown origin "paht"`},
-		{name: "missing origin", path: "/orders", workflowID: "o-{orderId}", wantErr: "must be {uuidv7} or {origin.field}"},
-		{name: "empty field", path: "/orders", workflowID: "o-{body.}", wantErr: "must be {uuidv7} or {origin.field}"},
+		{name: "missing origin", path: "/orders", workflowID: "o-{orderId}", wantErr: "must be {uuidv7}, {origin.field}, or {fingerprint(...)}"},
+		{name: "empty field", path: "/orders", workflowID: "o-{body.}", wantErr: "empty field name"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

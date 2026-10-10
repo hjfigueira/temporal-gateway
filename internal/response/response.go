@@ -51,6 +51,7 @@ const (
 	StatusValidationFailed Status = "VALIDATION_FAILED" // body doesn't match the declared schema
 	StatusPayloadTooLarge  Status = "PAYLOAD_TOO_LARGE" // body exceeds server.maxBodyBytes
 	StatusTimeout          Status = "TIMEOUT"           // dispatch exceeded server.requestTimeout
+	StatusUnavailable      Status = "UNAVAILABLE"       // namespace not connected yet, or Temporal down
 	StatusFailed           Status = "FAILED"            // fallback for any other dispatch error
 )
 
@@ -64,7 +65,7 @@ func (s Status) IsError() bool {
 		StatusWorkflowCancelled, StatusWorkflowTerminated, StatusWorkflowTimedOut,
 		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
 		StatusInvalidRequest, StatusValidationFailed, StatusPayloadTooLarge,
-		StatusTimeout, StatusFailed:
+		StatusTimeout, StatusUnavailable, StatusFailed:
 		return true
 	default:
 		return false

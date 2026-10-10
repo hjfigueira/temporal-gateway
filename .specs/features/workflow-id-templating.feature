@@ -1,13 +1,16 @@
 # See .specs/adr/active/0004-origin-field-placeholders-for-workflow-id-templating.md
 # See .specs/adr/active/0020-unresolved-workflow-id-placeholders-are-rejected.md
+# See .specs/adr/active/0025-fingerprint-placeholder-and-nested-body-paths.md
 # Code: internal/gateway/template.go, internal/gateway/dispatch_handler.go,
 #       internal/spec/template.go
 
 Feature: Workflow ID templating
   Any x-temporal string field (chiefly workflowId) may embed "{origin.field}"
   placeholders, resolved per request from the incoming HTTP call: path,
-  body, query, or header - plus the reserved "{uuidv7}" keyword, which needs
-  no origin and generates a fresh UUIDv7 per occurrence. A placeholder that
+  body, query, or header (body paths may nest: "{body.items[2].sku}") - plus
+  the reserved "{uuidv7}" keyword, which needs no origin and generates a
+  fresh UUIDv7 per occurrence, and "{fingerprint(ref)}", a stable hash of
+  any referenced value or of the whole body. A placeholder that
   can never resolve fails spec loading; one the request can't satisfy fails
   that request with 422 before anything is dispatched.
 
@@ -69,3 +72,50 @@ Feature: Workflow ID templating
     Given workflowId is "order-{orderId}"
     When the API spec is loaded
     Then loading fails saying it must be {uuidv7} or {origin.field}
+
+  Scenario Outline: Body paths reach nested fields and array elements
+    Given the request body is {"customer":{"id":"c1"},"items":[{"sku":"a"},{"sku":"b"}]}
+    And workflowId is "<template>"
+    When the template is rendered
+    Then the resulting workflow ID is "<rendered>"
+
+    Examples:
+      | template                 | rendered   |
+      | cust-{body.customer.id}  | cust-c1    |
+      | sku-{body.items[1].sku}  | sku-b      |
+
+  Scenario: A body path that doesn't exist rejects the request
+    Given workflowId is "sku-{body.items[5].sku}"
+    And the body's "items" has only 2 elements
+    When the request is handled
+    Then the response is 422 with status "INVALID_REQUEST"
+    And nothing is dispatched
+
+  Scenario: fingerprint(body) is stable for the same content
+    Given workflowId is "order-{fingerprint(body)}"
+    When two requests send {"a":1,"b":"x"} and {"b":"x","a":1.0}
+    Then both render the same 16-hex-character workflow ID suffix
+    # SHA-256 of the canonical JSON (sorted keys), first 16 hex chars.
+    But a request with {"a":2,"b":"x"} renders a different one
+
+  Scenario: fingerprint can target one value
+    Given workflowId is "line-{path.orderId}-{fingerprint(body.items[2])}"
+    When the template is rendered
+    Then only the third item affects the fingerprint
+    And path, query, or header values can be fingerprinted the same way
+
+  Scenario: A bare {body} fails spec loading
+    Given workflowId is "order-{body}"
+    When the API spec is loaded
+    Then loading fails suggesting {fingerprint(body)} or a field like {body.id}
+
+  Scenario Outline: A malformed path fails spec loading
+    Given workflowId is "<template>"
+    When the API spec is loaded
+    Then loading fails naming the problem
+
+    Examples:
+      | template                   |
+      | x-{body.items[2}           |
+      | x-{body.items[-1]}         |
+      | x-{fingerprint(body}       |

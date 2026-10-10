@@ -98,11 +98,33 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 
 	logStartup(logger, flags.configPath, specPaths, cfg, apiSpec)
 
-	// The probe server starts before Temporal is dialed, so liveness passes
-	// (and readiness reports why it doesn't) while the gateway is still
-	// waiting for Temporal to come up.
-	probes := health.NewProbes("waiting for temporal")
-	if cfg.Health.Enabled && !flags.dryRun {
+	connections := temporal.NewConnections(cfg.Temporal)
+	// Closes every client dialed by the time run returns.
+	defer connections.Close()
+
+	// Needs only config.yml's namespace names, so a bad reference fails
+	// startup even while Temporal is unreachable.
+	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
+		return fmt.Errorf("api spec references unknown temporal namespace: %w", err)
+	}
+
+	if flags.dryRun {
+		// A dry run is a pass/fail check (CI, pre-deploy): dial now, once,
+		// instead of serving while retrying.
+		reconnect := cfg.Temporal.Reconnect
+		reconnect.MaxAttempts = 1
+		if err := connections.Connect(ctx, reconnect, logger); err != nil {
+			return fmt.Errorf("connect to temporal: %w", err)
+		}
+		logger.Info("dry run: config, api spec, and temporal connections are all valid; exiting without starting the server")
+		return nil
+	}
+
+	// Readiness reports each namespace as "not connected yet" until it's
+	// dialed, then its live health (ADR-019, ADR-026).
+	probes := health.NewProbes("starting")
+	probes.Ready(connections.CheckHealth)
+	if cfg.Health.Enabled {
 		healthServer, err := startHealthServer(fmt.Sprintf("%s:%d", cfg.Health.Host, cfg.Health.Port), probes.Handler(), logger)
 		if err != nil {
 			return fmt.Errorf("start health server: %w", err)
@@ -110,31 +132,6 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 		// Close only fails if closing the listener does; nothing to do then.
 		defer func() { _ = healthServer.Close() }()
 	}
-
-	temporalCfg := cfg.Temporal
-	if flags.dryRun {
-		// A dry run is a pass/fail check (CI, pre-deploy), so it reports an
-		// unreachable Temporal immediately instead of waiting for it.
-		temporalCfg.Reconnect.MaxAttempts = 1
-	}
-	connections, err := temporal.NewConnections(ctx, temporalCfg, logger)
-	// Deferred before the error check on purpose: on failure NewConnections
-	// still returns whatever it did dial, and those must be closed too.
-	defer connections.Close()
-	if err != nil {
-		return fmt.Errorf("connect to temporal: %w", err)
-	}
-
-	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
-		return fmt.Errorf("api spec references unknown temporal namespace: %w", err)
-	}
-
-	if flags.dryRun {
-		logger.Info("dry run: config, api spec, and temporal connections are all valid; exiting without starting the server")
-		return nil
-	}
-
-	probes.Ready(connections.CheckHealth)
 
 	dispatcher := temporal.NewDispatcher(connections)
 	requestTimeout := cfg.Server.RequestTimeoutDuration()
@@ -146,7 +143,33 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 	// serve has already shut server down gracefully; this only releases
 	// what's left, and has nothing actionable to report.
 	defer func() { _ = server.Close() }()
-	return serve(ctx, server, probes, logger)
+
+	// The API serves right away; Temporal is dialed in the background, and
+	// each namespace's routes answer 503 until it connects (ADR-026). A dial
+	// that gives up (temporal.reconnect.maxAttempts) stops the gateway.
+	serveCtx, stopServing := context.WithCancel(ctx)
+	defer stopServing()
+	connectErr := make(chan error, 1)
+	go func() {
+		err := connections.Connect(serveCtx, cfg.Temporal.Reconnect, logger)
+		if err != nil {
+			stopServing()
+		}
+		connectErr <- err
+	}()
+
+	serveErr := serve(serveCtx, server, probes, logger)
+	stopServing()
+	// Wait for Connect to return, so a dial finishing during shutdown is
+	// still closed by the deferred connections.Close.
+	dialErr := <-connectErr
+	if serveErr != nil {
+		return serveErr
+	}
+	if dialErr != nil && ctx.Err() == nil {
+		return fmt.Errorf("connect to temporal: %w", dialErr)
+	}
+	return nil
 }
 
 // cliFlags holds the process's parsed command-line flags.

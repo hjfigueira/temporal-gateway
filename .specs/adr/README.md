@@ -45,6 +45,8 @@ which.
 | [0022](active/0022-per-request-limits-and-sanitized-errors.md) | Per-request body limit, dispatch deadline, and sanitized errors |
 | [0023](active/0023-temporal-connection-options-and-concurrent-dial.md) | Concurrent namespace dial; CA bundle, server name, and API key |
 | [0024](active/0024-ci-checks-on-every-push-and-pr.md) | CI runs gofmt, vet, and race tests on every push and PR |
+| [0025](active/0025-fingerprint-placeholder-and-nested-body-paths.md) | `{fingerprint(...)}` placeholder and nested body paths |
+| [0026](active/0026-serve-http-before-temporal-connects.md) | Serve HTTP immediately; Temporal readiness via probes |
 
 ## Adding a new decision
 

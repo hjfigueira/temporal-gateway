@@ -78,7 +78,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     Given a config.yml and api-spec.yaml that are both fully valid
     And Temporal connections can be dialed
     When the gateway runs with --dry-run
-    Then it loads config, loads the spec, dials Temporal, validates namespaces
+    Then it loads config, loads the spec, validates namespaces, then dials Temporal once
     And exits 0 without binding the HTTP server
 
   Scenario: --dry-run does not wait for an unreachable Temporal

@@ -1,4 +1,5 @@
 # See .specs/adr/active/0019-liveness-and-readiness-probes-on-a-separate-port.md
+# See .specs/adr/active/0026-serve-http-before-temporal-connects.md
 # Code: internal/health/health.go, internal/temporal/connections.go
 #       (Connections.CheckHealth), internal/config/gateway.go (HealthConfig),
 #       main.go (startHealthServer, serve)
@@ -18,12 +19,20 @@ Feature: Liveness and readiness probes
     Then GET /livez and GET /readyz are served on port 8082
     And neither path is served on port 8081
 
-  Scenario: Liveness passes while waiting for Temporal at startup
+  Scenario: The API serves while Temporal is still connecting
     Given Temporal is not reachable
     When the gateway starts and retries the dial
     Then GET /livez returns 200 {"status":"ok"}
-    And GET /readyz returns 503 with reason "waiting for temporal"
-    And the API server on port 8081 is not bound yet
+    And GET /readyz returns 503 with checks "default" = "not connected yet"
+    And the API server on port 8081 is already serving
+    And a request to a route for "default" gets 503 with status "UNAVAILABLE"
+
+  Scenario: Each namespace becomes usable as soon as it connects
+    Given "default" is connected but "notifications" is still being dialed
+    When a request is made to a route targeting "default"
+    Then it is dispatched normally
+    But a route targeting "notifications" gets 503 with status "UNAVAILABLE"
+    And GET /readyz returns 503 until "notifications" connects too
 
   Scenario: Readiness passes when every namespace is healthy
     Given namespaces "default" and "notifications" are connected and healthy

@@ -50,7 +50,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, binding spec.TemporalBinding,
 // signalWorkflow sends binding.SignalName to workflowID, with body as the
 // signal's input.
 func (d *Dispatcher) signalWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
-	if err := conn.Client.SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
+	if err := conn.Client().SignalWorkflow(ctx, workflowID, "", binding.SignalName, body); err != nil {
 		return nil, err
 	}
 	return response.WorkflowSignaled{
@@ -62,7 +62,7 @@ func (d *Dispatcher) signalWorkflow(ctx context.Context, conn *Connection, bindi
 
 // cancelWorkflow requests cancellation of workflowID's current run.
 func (d *Dispatcher) cancelWorkflow(ctx context.Context, conn *Connection, workflowID string) (any, error) {
-	if err := conn.Client.CancelWorkflow(ctx, workflowID, ""); err != nil {
+	if err := conn.Client().CancelWorkflow(ctx, workflowID, ""); err != nil {
 		return nil, err
 	}
 	return response.WorkflowAck{
@@ -81,7 +81,7 @@ func (d *Dispatcher) terminateWorkflow(ctx context.Context, conn *Connection, wo
 			reason = r
 		}
 	}
-	if err := conn.Client.TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
+	if err := conn.Client().TerminateWorkflow(ctx, workflowID, "", reason); err != nil {
 		return nil, err
 	}
 	return response.WorkflowAck{
@@ -100,7 +100,7 @@ func (d *Dispatcher) queryWorkflow(ctx context.Context, conn *Connection, bindin
 		args = append(args, body)
 	}
 
-	value, err := conn.Client.QueryWorkflow(ctx, workflowID, "", binding.QueryType, args...)
+	value, err := conn.Client().QueryWorkflow(ctx, workflowID, "", binding.QueryType, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func (d *Dispatcher) queryWorkflow(ctx context.Context, conn *Connection, bindin
 // getResult blocks until workflowID's current run completes and returns its
 // decoded result as-is, for the same reason queryWorkflow does.
 func (d *Dispatcher) getResult(ctx context.Context, conn *Connection, workflowID string) (any, error) {
-	run := conn.Client.GetWorkflow(ctx, workflowID, "")
+	run := conn.Client().GetWorkflow(ctx, workflowID, "")
 
 	var result any
 	if err := run.Get(ctx, &result); err != nil {

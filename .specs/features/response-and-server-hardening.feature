@@ -59,6 +59,11 @@ Feature: Response envelope and HTTP server hardening
     When the config is loaded
     Then loading fails naming the offending field
 
+  Scenario: An unavailable Temporal is answered with 503
+    Given a route's namespace is not connected yet, or Temporal reports Unavailable
+    When the request is dispatched
+    Then the response is 503 with status "UNAVAILABLE"
+
   Scenario: Raw Temporal errors are not returned to callers
     Given a dispatch fails with an error naming hosts or namespaces
     When the response is written

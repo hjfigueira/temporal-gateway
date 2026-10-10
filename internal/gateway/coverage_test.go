@@ -75,6 +75,7 @@ func TestErrorResponse(t *testing.T) {
 		{serviceerror.NewInvalidArgument("x"), response.StatusInvalidArgument, http.StatusBadRequest},
 		{serviceerror.NewPermissionDenied("x", ""), response.StatusForbidden, http.StatusForbidden},
 		{serviceerror.NewDeadlineExceeded("x"), response.StatusTimeout, http.StatusGatewayTimeout},
+		{serviceerror.NewUnavailable("x"), response.StatusUnavailable, http.StatusServiceUnavailable},
 		{context.DeadlineExceeded, response.StatusTimeout, http.StatusGatewayTimeout},
 		{errors.New("x"), response.StatusFailed, http.StatusBadGateway},
 	}

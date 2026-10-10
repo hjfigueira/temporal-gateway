@@ -111,7 +111,7 @@ func TestConnectionsHealthValidateAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conns := Connections{"default": {Client: cl, Catalog: NewCatalog(nil)}}
+	conns := Connections{"default": connected(cl, NewCatalog(nil))}
 
 	if got := conns.CheckHealth(context.Background()); len(got) != 1 || got["default"] != nil {
 		t.Errorf("CheckHealth = %v, want default healthy", got)

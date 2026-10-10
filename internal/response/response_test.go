@@ -61,7 +61,7 @@ func TestWorkflowStartedEmbedsEnvelopeFlat(t *testing.T) {
 func TestStatusIsError(t *testing.T) {
 	errorStatuses := []Status{
 		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
-		StatusInvalidRequest, StatusValidationFailed, StatusPayloadTooLarge, StatusTimeout, StatusFailed,
+		StatusInvalidRequest, StatusValidationFailed, StatusPayloadTooLarge, StatusTimeout, StatusUnavailable, StatusFailed,
 	}
 	for _, s := range errorStatuses {
 		if !s.IsError() {

@@ -22,10 +22,7 @@ import (
 func newFakeDispatcher(t *testing.T) (*fakeFrontend, *Dispatcher) {
 	t.Helper()
 	f, addr := startFakeFrontend(t)
-	conns := Connections{"default": {
-		Client:  dialFake(t, addr),
-		Catalog: NewCatalog([]config.WorkflowDefinition{{Name: "OrderWorkflow", TaskQueue: "orders"}}),
-	}}
+	conns := Connections{"default": connected(dialFake(t, addr), NewCatalog([]config.WorkflowDefinition{{Name: "OrderWorkflow", TaskQueue: "orders"}}))}
 	return f, NewDispatcher(conns)
 }
 

@@ -1,5 +1,7 @@
 # ADR-019: Liveness and readiness probes on a separate port
 
+**Superseded in part by [ADR-026](0026-serve-http-before-temporal-connects.md)**: the API server now binds before Temporal connects, and `/readyz` reports each namespace as `"not connected yet"` instead of a single `"waiting for temporal"` reason. The separate probe port stands.
+
 **Status:** Accepted
 
 **Related features:** [`health-probes.feature`](../../features/health-probes.feature)

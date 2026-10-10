@@ -1,6 +1,7 @@
 # See .specs/adr/active/0003-multi-namespace-temporal-explicit-per-trigger.md,
 #     .specs/adr/active/0018-retry-temporal-dial-at-startup.md,
-#     .specs/adr/active/0023-temporal-connection-options-and-concurrent-dial.md
+#     .specs/adr/active/0023-temporal-connection-options-and-concurrent-dial.md,
+#     .specs/adr/active/0026-serve-http-before-temporal-connects.md
 # Code: internal/config/temporal.go, internal/temporal/connections.go,
 #       internal/temporal/client.go, internal/temporal/catalog.go
 
@@ -54,20 +55,20 @@ Feature: Multi-namespace Temporal connections
     When the gateway starts
     Then it logs a warning naming "default", the host, and the attempt number
     And it retries the dial every 5 seconds
-    And the HTTP server is not bound while it waits
+    And the HTTP server is already serving, answering that namespace's routes with 503
     When the Temporal server becomes reachable
-    Then the next attempt connects and startup continues
+    Then the next attempt connects and those routes start dispatching
 
   Scenario: Reconnect attempts are capped by maxAttempts
     Given temporal.reconnect.maxAttempts is 3
     And the Temporal server for namespace "default" is never reachable
     When the gateway starts
-    Then it dials 3 times, then startup fails naming "default" and the attempt count
+    Then it dials 3 times, then the gateway shuts down, exiting non-zero and naming "default" and the attempt count
 
   Scenario: A shutdown signal interrupts waiting for Temporal
     Given the gateway is retrying an unreachable Temporal at startup
     When it receives SIGINT or SIGTERM
-    Then it stops retrying immediately and exits without binding the HTTP server
+    Then it stops retrying immediately, drains the HTTP server, and exits 0
 
   Scenario: reconnect defaults to retrying every 5s forever
     Given config.yml has no temporal.reconnect section

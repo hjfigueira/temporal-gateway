@@ -353,6 +353,11 @@ func errorResponse(err error) (response.Status, int, string) {
 		return response.StatusForbidden, http.StatusForbidden, "permission denied"
 	}
 
+	var unavailable *serviceerror.Unavailable
+	if errors.As(err, &unavailable) {
+		return response.StatusUnavailable, http.StatusServiceUnavailable, "temporal unavailable"
+	}
+
 	var deadlineExceeded *serviceerror.DeadlineExceeded
 	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &deadlineExceeded) {
 		return response.StatusTimeout, http.StatusGatewayTimeout, "timed out waiting for temporal"

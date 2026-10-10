@@ -75,3 +75,66 @@ func TestRenderTemplateUUIDv7(t *testing.T) {
 		t.Errorf("expected distinct uuids per render, got %q twice", first)
 	}
 }
+
+func TestFieldResolverNestedBodyAndFingerprint(t *testing.T) {
+	body := map[string]any{
+		"customer": map[string]any{"id": "c1"},
+		"items":    []any{map[string]any{"sku": "a"}, map[string]any{"sku": "b", "qty": float64(2)}},
+		"note":     nil,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/orders/o1?q=x", nil)
+	req.Header.Set("X-Tenant", "t1")
+	resolve := fieldResolver(req, map[string]string{"orderId": "o1"}, body)
+
+	for name, want := range map[string]string{
+		"body.customer.id":  "c1",
+		"body.items[1].sku": "b",
+		"body.note":         "",
+	} {
+		if got, ok := resolve(name); !ok || got != want {
+			t.Errorf("resolve(%q) = %q, %v; want %q", name, got, ok, want)
+		}
+	}
+
+	for _, name := range []string{"body.items[5]", "body.customer[0]", "body.items.sku", "body.missing.x", "fingerprint(body.nope)", "not a placeholder"} {
+		if got, ok := resolve(name); ok {
+			t.Errorf("resolve(%q) = %q, true; want unresolved", name, got)
+		}
+	}
+
+	whole, ok := resolve("fingerprint(body)")
+	if !ok || len(whole) != 16 {
+		t.Fatalf("fingerprint(body) = %q, %v; want 16 hex chars", whole, ok)
+	}
+	item, _ := resolve("fingerprint(body.items[1])")
+	if item == whole {
+		t.Error("fingerprint of a sub-field equals the whole body's")
+	}
+	if again, _ := resolve("fingerprint(body)"); again != whole {
+		t.Errorf("fingerprint(body) not stable: %q then %q", whole, again)
+	}
+	for _, name := range []string{"fingerprint(path.orderId)", "fingerprint(query.q)", "fingerprint(header.X-Tenant)"} {
+		if got, ok := resolve(name); !ok || len(got) != 16 {
+			t.Errorf("resolve(%q) = %q, %v; want a fingerprint", name, got, ok)
+		}
+	}
+
+	if _, ok := fieldResolver(req, nil, nil)("fingerprint(body)"); ok {
+		t.Error("fingerprint(body) with no body: want unresolved")
+	}
+}
+
+func TestFingerprintIgnoresKeyOrderAndNumberSpelling(t *testing.T) {
+	a := fingerprint(map[string]any{"a": float64(1), "b": "x"})
+	b := fingerprint(map[string]any{"b": "x", "a": 1.0})
+	if a != b {
+		t.Fatalf("fingerprints differ for equal documents: %q vs %q", a, b)
+	}
+	if a == fingerprint(map[string]any{"a": float64(2), "b": "x"}) {
+		t.Fatal("different documents share a fingerprint")
+	}
+	// Known value, so the format can't drift silently: sha256(`"x"`)[:8].
+	if got := fingerprint("x"); got != "ba2df4903a2c14e8" {
+		t.Fatalf(`fingerprint("x") = %q, want "ba2df4903a2c14e8"`, got)
+	}
+}

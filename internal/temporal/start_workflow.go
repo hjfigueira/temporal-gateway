@@ -87,7 +87,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 	// withStartedFlag (see started.go) - atomically, unlike describing the
 	// workflow first, which two concurrent starts would both see as absent.
 	startCtx, started := withStartedFlag(ctx)
-	run, err := conn.Client.ExecuteWorkflow(startCtx, options, binding.WorkflowType, args...)
+	run, err := conn.Client().ExecuteWorkflow(startCtx, options, binding.WorkflowType, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 // real state. It's informational only - whether a new run was created is
 // already decided - so a failed describe falls back to "already running".
 func existingRunStatus(ctx context.Context, conn *Connection, workflowID, runID string) (response.Status, string) {
-	desc, err := conn.Client.DescribeWorkflowExecution(ctx, workflowID, runID)
+	desc, err := conn.Client().DescribeWorkflowExecution(ctx, workflowID, runID)
 	if err != nil {
 		return classifyExistingRun(enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED)
 	}
