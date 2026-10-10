@@ -15,7 +15,7 @@ such request shared that one ID, so it could start, attach to, signal, or
 
 ## Decision
 
-- **At startup** (`internal/spec/template.go`, part of spec validation per
+- **At startup** (`internal/spec/validation.go` via `internal/templating`, part of spec validation per
   [ADR-008](0008-fail-fast-validation-at-startup.md)): each placeholder
   must be `{uuidv7}` or `{origin.field}`. The origin must be one of
   `path|body|query|header` (case-insensitive) and the field must be

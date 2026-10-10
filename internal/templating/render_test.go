@@ -1,4 +1,4 @@
-package gateway
+package templating
 
 import (
 	"net/http"
@@ -16,7 +16,7 @@ func TestRenderTemplateSources(t *testing.T) {
 	pathParams := map[string]string{"orderId": "o1"}
 	body := map[string]any{"customerId": "c1", "priority": float64(2)}
 
-	resolve := fieldResolver(req, pathParams, body)
+	resolve := sourceOf(req, pathParams, body).resolve
 
 	tests := []struct {
 		name       string
@@ -37,12 +37,12 @@ func TestRenderTemplateSources(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, unresolved := renderTemplate(tt.tmpl, resolve)
+			got, unresolved := render(tt.tmpl, resolve)
 			if got != tt.want {
-				t.Errorf("renderTemplate(%q) = %q, want %q", tt.tmpl, got, tt.want)
+				t.Errorf("render(%q) = %q, want %q", tt.tmpl, got, tt.want)
 			}
 			if (len(unresolved) > 0) != tt.unresolved {
-				t.Errorf("renderTemplate(%q) unresolved = %v, want unresolved=%v", tt.tmpl, unresolved, tt.unresolved)
+				t.Errorf("render(%q) unresolved = %v, want unresolved=%v", tt.tmpl, unresolved, tt.unresolved)
 			}
 		})
 	}
@@ -50,9 +50,9 @@ func TestRenderTemplateSources(t *testing.T) {
 
 func TestRenderTemplateUUIDv7(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(""))
-	resolve := fieldResolver(req, nil, nil)
+	resolve := sourceOf(req, nil, nil).resolve
 
-	got, _ := renderTemplate("order-{uuidv7}", resolve)
+	got, _ := render("order-{uuidv7}", resolve)
 	id := strings.TrimPrefix(got, "order-")
 
 	parsed, err := uuid.Parse(id)
@@ -64,13 +64,13 @@ func TestRenderTemplateUUIDv7(t *testing.T) {
 	}
 
 	// Case-insensitive keyword.
-	if got3, _ := renderTemplate("{UUIDv7}", resolve); got3 == "{UUIDv7}" {
+	if got3, _ := render("{UUIDv7}", resolve); got3 == "{UUIDv7}" {
 		t.Errorf("UUIDv7 keyword should be case-insensitive, got %q", got3)
 	}
 
 	// A fresh value is generated per occurrence.
-	first, _ := renderTemplate("{uuidv7}", resolve)
-	second, _ := renderTemplate("{uuidv7}", resolve)
+	first, _ := render("{uuidv7}", resolve)
+	second, _ := render("{uuidv7}", resolve)
 	if first == second {
 		t.Errorf("expected distinct uuids per render, got %q twice", first)
 	}
@@ -84,7 +84,7 @@ func TestFieldResolverNestedBodyAndFingerprint(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/orders/o1?q=x", nil)
 	req.Header.Set("X-Tenant", "t1")
-	resolve := fieldResolver(req, map[string]string{"orderId": "o1"}, body)
+	resolve := sourceOf(req, map[string]string{"orderId": "o1"}, body).resolve
 
 	for name, want := range map[string]string{
 		"body.customer.id":  "c1",
@@ -119,7 +119,7 @@ func TestFieldResolverNestedBodyAndFingerprint(t *testing.T) {
 		}
 	}
 
-	if _, ok := fieldResolver(req, nil, nil)("fingerprint(body)"); ok {
+	if _, ok := sourceOf(req, nil, nil).resolve("fingerprint(body)"); ok {
 		t.Error("fingerprint(body) with no body: want unresolved")
 	}
 }
@@ -136,5 +136,30 @@ func TestFingerprintIgnoresKeyOrderAndNumberSpelling(t *testing.T) {
 	// Known value, so the format can't drift silently: sha256(`"x"`)[:8].
 	if got := fingerprint("x"); got != "ba2df4903a2c14e8" {
 		t.Fatalf(`fingerprint("x") = %q, want "ba2df4903a2c14e8"`, got)
+	}
+}
+
+// sourceOf builds the Source the gateway would for r.
+func sourceOf(r *http.Request, pathParams map[string]string, body any) Source {
+	return Source{PathParams: pathParams, Query: r.URL.Query(), Header: r.Header, Body: body}
+}
+
+func TestRenderResolvesFromSource(t *testing.T) {
+	src := Source{PathParams: map[string]string{"orderId": "o1"}, Body: map[string]any{"items": []any{"a"}}}
+	got, unresolved := Render("order-{path.orderId}-{body.items[0]}-{body.missing}", src)
+	if got != "order-o1-a-{body.missing}" || len(unresolved) != 1 || unresolved[0] != "{body.missing}" {
+		t.Fatalf("Render = %q, %v", got, unresolved)
+	}
+}
+
+func TestResolveMissingValues(t *testing.T) {
+	resolve := sourceOf(httptest.NewRequest(http.MethodGet, "/", nil), nil, map[string]any{"empty": nil}).resolve
+	for _, name := range []string{"query.absent", "header.Absent"} {
+		if _, ok := resolve(name); ok {
+			t.Errorf("resolve(%q) ok = true, want false", name)
+		}
+	}
+	if v, ok := resolve("body.empty"); !ok || v != "" {
+		t.Errorf(`resolve("body.empty") = %q, %v; want "", true`, v, ok)
 	}
 }

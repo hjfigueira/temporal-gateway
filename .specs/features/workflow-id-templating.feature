@@ -1,8 +1,8 @@
 # See .specs/adr/active/0004-origin-field-placeholders-for-workflow-id-templating.md
 # See .specs/adr/active/0020-unresolved-workflow-id-placeholders-are-rejected.md
 # See .specs/adr/active/0025-fingerprint-placeholder-and-nested-body-paths.md
-# Code: internal/gateway/template.go, internal/gateway/dispatch_handler.go,
-#       internal/spec/template.go
+# Code: internal/templating (parse + render), internal/spec/validation.go
+#       (validateWorkflowIDTemplate), internal/gateway/dispatch_handler.go
 
 Feature: Workflow ID templating
   Any x-temporal string field (chiefly workflowId) may embed "{origin.field}"

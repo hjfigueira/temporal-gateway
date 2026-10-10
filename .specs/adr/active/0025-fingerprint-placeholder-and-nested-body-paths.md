@@ -27,7 +27,7 @@ from content.
   as a JSON string.
 - **A bare `{body}`** is rejected at spec load. A whole JSON document isn't
   a usable ID component; the error points to `{fingerprint(body)}`.
-- **One parser** (`spec.ParsePlaceholder`) serves both startup validation
+- **One parser** (`templating.ParsePlaceholder`, in `internal/templating`) serves both startup validation
   and request-time rendering, so what loads is exactly what renders.
 - Unresolved references, including fingerprints, follow ADR-020: **422**,
   and nothing is dispatched. A missing body, a missing key, an index out

@@ -1,17 +1,32 @@
-package spec
+// Package templating parses and renders the "{...}" placeholders in an
+// x-temporal workflowId template (see ADR-004, ADR-020, ADR-025):
+// "{origin.field}" request references (body paths may nest, e.g.
+// "{body.items[2].sku}"), "{uuidv7}", and "{fingerprint(ref)}". It has no
+// dependency on the spec or gateway packages: spec validates templates
+// with ParsePlaceholder at load time, and gateway renders them per request
+// with Render.
+package templating
 
 import (
 	"fmt"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 )
 
-// TemplatePlaceholder matches a "{name}" placeholder in a workflowId
-// template. Shared with internal/gateway, which renders the same templates
-// at request time.
-var TemplatePlaceholder = regexp.MustCompile(`\{([^{}]+)}`)
+// placeholderPattern matches one "{...}" placeholder; group 1 is the text
+// between the braces.
+var placeholderPattern = regexp.MustCompile(`\{([^{}]+)}`)
+
+// Placeholders returns the text inside each "{...}" placeholder in tmpl, in
+// order, e.g. "order-{path.id}-{uuidv7}" -> ["path.id", "uuidv7"].
+func Placeholders(tmpl string) []string {
+	var names []string
+	for _, m := range placeholderPattern.FindAllStringSubmatch(tmpl, -1) {
+		names = append(names, m[1])
+	}
+	return names
+}
 
 // PlaceholderKind is what a parsed placeholder renders to.
 type PlaceholderKind int
@@ -145,24 +160,4 @@ func parseBodyPath(s string) ([]PathSegment, error) {
 		}
 	}
 	return path, nil
-}
-
-// validateWorkflowIDTemplate checks every placeholder in a trigger's
-// workflowId parses (see ParsePlaceholder), and that a path reference names
-// one of the route's own path parameters. A placeholder that can never
-// resolve would otherwise fail every request that hits the route (see
-// ADR-020).
-func validateWorkflowIDTemplate(method, path string, i int, tmpl string) []error {
-	var errs []error
-	for _, m := range TemplatePlaceholder.FindAllStringSubmatch(tmpl, -1) {
-		p, err := ParsePlaceholder(m[1])
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: workflowId placeholder %w", method, path, i, err))
-			continue
-		}
-		if p.Ref.Origin == "path" && !slices.Contains(PathParamNames(path), p.Ref.Name) {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: workflowId placeholder {%s} names no path parameter of this route", method, path, i, m[1]))
-		}
-	}
-	return errs
 }

@@ -362,7 +362,8 @@ go test -race ./...
 main.go              entrypoint: loads config/spec, wires everything, serves HTTP
 internal/config      config.yml parsing
 internal/spec        api-spec.yaml parsing + validation
-internal/gateway     HTTP handler generation, request templating/validation
+internal/gateway     HTTP handler generation, request validation, dispatch
+internal/templating  workflowId placeholders: parsing, rendering, fingerprint
 internal/temporal    Temporal client(s), namespace connection pool, dispatch
 internal/validate    JSON Schema-lite request body validation
 internal/response    response envelope + status types

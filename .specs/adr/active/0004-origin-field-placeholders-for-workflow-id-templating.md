@@ -18,7 +18,7 @@ Any `x-temporal` string field (chiefly `workflowId`) may embed
 `{origin.field}` placeholders, resolved at request time: `path`, `body`,
 `query`, `header`, plus the reserved `{uuidv7}` (no origin) for a freshly
 generated UUIDv7. Rendering is pure string substitution
-(`internal/gateway/template.go`'s `renderTemplate`) against a resolver
+(originally `internal/gateway/template.go`'s `renderTemplate`; now `internal/templating`) against a resolver
 closure built fresh per request; a placeholder the resolver can't satisfy is
 left untouched rather than erroring, failing visibly in the resulting
 workflow ID rather than failing the whole request.

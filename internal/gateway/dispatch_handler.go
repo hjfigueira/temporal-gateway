@@ -19,6 +19,7 @@ import (
 
 	"temporal-gateway/internal/response"
 	"temporal-gateway/internal/spec"
+	"temporal-gateway/internal/templating"
 )
 
 // tracer starts the one span dispatchHandler creates per HTTP request. It
@@ -140,12 +141,12 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 		// Render every workflowId before dispatching any, so a request
 		// missing a templated field dispatches nothing rather than acting
 		// on a literal "{...}" ID shared by every such request.
-		resolve := fieldResolver(r, pathParams, body)
+		src := templating.Source{PathParams: pathParams, Query: r.URL.Query(), Header: r.Header, Body: body}
 		workflowIDs := make([]string, len(bindings))
 		var unresolved []string
 		for i, binding := range bindings {
 			var missing []string
-			workflowIDs[i], missing = renderTemplate(binding.WorkflowID, resolve)
+			workflowIDs[i], missing = templating.Render(binding.WorkflowID, src)
 			unresolved = append(unresolved, missing...)
 		}
 		if len(unresolved) > 0 {

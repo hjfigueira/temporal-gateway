@@ -99,15 +99,3 @@ func TestValidateBodyWithoutSchema(t *testing.T) {
 		t.Errorf("no application/json schema: %+v", r)
 	}
 }
-
-func TestFieldResolverMissingValues(t *testing.T) {
-	resolve := fieldResolver(httptest.NewRequest(http.MethodGet, "/", nil), nil, map[string]any{"empty": nil})
-	for _, name := range []string{"query.absent", "header.Absent"} {
-		if _, ok := resolve(name); ok {
-			t.Errorf("resolve(%q) ok = true, want false", name)
-		}
-	}
-	if v, ok := resolve("body.empty"); !ok || v != "" {
-		t.Errorf(`resolve("body.empty") = %q, %v; want "", true`, v, ok)
-	}
-}

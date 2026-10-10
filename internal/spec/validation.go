@@ -3,7 +3,10 @@ package spec
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
+
+	"temporal-gateway/internal/templating"
 )
 
 // validIDReusePolicies mirrors the WorkflowIDReusePolicy values the
@@ -222,4 +225,24 @@ func validateSearchAttributeValue(sa SearchAttribute) error {
 		}
 	}
 	return nil
+}
+
+// validateWorkflowIDTemplate checks every placeholder in a trigger's
+// workflowId parses (see templating.ParsePlaceholder), and that a path
+// reference names one of the route's own path parameters. A placeholder
+// that can never resolve would otherwise fail every request that hits the
+// route (see ADR-020).
+func validateWorkflowIDTemplate(method, path string, i int, tmpl string) []error {
+	var errs []error
+	for _, name := range templating.Placeholders(tmpl) {
+		p, err := templating.ParsePlaceholder(name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: workflowId placeholder %w", method, path, i, err))
+			continue
+		}
+		if p.Ref.Origin == "path" && !slices.Contains(PathParamNames(path), p.Ref.Name) {
+			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: workflowId placeholder {%s} names no path parameter of this route", method, path, i, name))
+		}
+	}
+	return errs
 }

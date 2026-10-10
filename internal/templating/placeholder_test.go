@@ -1,4 +1,4 @@
-package spec
+package templating
 
 import (
 	"reflect"
@@ -61,5 +61,16 @@ func TestParsePlaceholderErrors(t *testing.T) {
 		if _, err := ParsePlaceholder(in); err == nil || !strings.Contains(err.Error(), wantErr) {
 			t.Errorf("ParsePlaceholder(%q) err = %v, want it to contain %q", in, err, wantErr)
 		}
+	}
+}
+
+func TestPlaceholders(t *testing.T) {
+	got := Placeholders("order-{path.id}-{fingerprint(body.items[2])}-{uuidv7}")
+	want := []string{"path.id", "fingerprint(body.items[2])", "uuidv7"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Placeholders = %v, want %v", got, want)
+	}
+	if got := Placeholders("no-placeholders"); got != nil {
+		t.Fatalf("Placeholders = %v, want nil", got)
 	}
 }
