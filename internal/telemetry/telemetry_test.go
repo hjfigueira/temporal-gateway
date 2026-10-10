@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"temporal-gateway/internal/config"
 )
 
@@ -39,5 +42,29 @@ func TestSetupDisabledReturnsNoopShutdown(t *testing.T) {
 	}
 	if err := shutdown(context.Background()); err != nil {
 		t.Errorf("no-op shutdown returned error: %v", err)
+	}
+}
+
+func TestSetupEnabledInstallsProviderAndShutsDown(t *testing.T) {
+	prev := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	for _, insecure := range []bool{true, false} {
+		shutdown, err := Setup(context.Background(), config.OTelConfig{Enabled: true, ServiceName: "test", Endpoint: "127.0.0.1:1", Insecure: insecure})
+		if err != nil {
+			t.Fatalf("Setup(insecure=%v): %v", insecure, err)
+		}
+		if _, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider); !ok {
+			t.Fatalf("global TracerProvider is %T, want *sdktrace.TracerProvider", otel.GetTracerProvider())
+		}
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown: %v", err)
+		}
+	}
+}
+
+func TestSetupRejectsMalformedEndpoint(t *testing.T) {
+	if _, err := Setup(context.Background(), config.OTelConfig{Enabled: true, Endpoint: "%%%"}); err == nil {
+		t.Fatal("Setup with a malformed endpoint returned nil, want an error")
 	}
 }

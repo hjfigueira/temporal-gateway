@@ -2,14 +2,14 @@
 
 **Status:** Accepted
 
-**Related features:** [`response-and-server-hardening.feature`](../features/response-and-server-hardening.feature)
+**Related features:** [`response-and-server-hardening.feature`](../../features/response-and-server-hardening.feature)
 
 ## Context
 
 A single HTTP status code can't express "2 of 3 triggers succeeded" in a
 multi-trigger response, and a Go `nil` error alone can't express
 "succeeded, but not in the way you'd expect" (see
-[ADR-005](0005-accurate-start-semantics.md)).
+[ADR-005](../deprecated/0005-accurate-start-semantics.md)).
 
 ## Decision
 

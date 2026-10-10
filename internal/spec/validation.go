@@ -108,6 +108,7 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 	if t.WorkflowID == "" {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing workflowId", method, path, i))
 	}
+	errs = append(errs, validateWorkflowIDTemplate(method, path, i, t.WorkflowID)...)
 
 	return errs
 }

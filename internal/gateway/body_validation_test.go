@@ -75,7 +75,7 @@ func TestDispatchHandlerValidatesBody(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dispatcher := &recordingDispatcher{}
-			handler := dispatchHandler(createOrderRoute(), dispatcher, logger)
+			handler := dispatchHandler(createOrderRoute(), dispatcher, Options{}, logger)
 
 			req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(tt.body))
 			rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestDispatchHandlerValidatesBody(t *testing.T) {
 func TestDispatchHandlerValidationResponseShape(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &recordingDispatcher{}
-	handler := dispatchHandler(createOrderRoute(), dispatcher, logger)
+	handler := dispatchHandler(createOrderRoute(), dispatcher, Options{}, logger)
 
 	// Two independent problems: orderId missing, customerId wrong type.
 	// Both should show up in one response instead of just the first found.

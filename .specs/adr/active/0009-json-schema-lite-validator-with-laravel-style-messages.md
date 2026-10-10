@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`request-validation.feature`](../features/request-validation.feature)
+**Related features:** [`request-validation.feature`](../../features/request-validation.feature)
 
 ## Context
 

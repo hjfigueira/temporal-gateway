@@ -3,6 +3,7 @@ package dotenv
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,8 +23,8 @@ func TestLoadSetsUnsetVariables(t *testing.T) {
 		t.Fatalf("Load returned error: %v", err)
 	}
 	t.Cleanup(func() {
-		os.Unsetenv("DOTENV_TEST_A")
-		os.Unsetenv("DOTENV_TEST_B")
+		_ = os.Unsetenv("DOTENV_TEST_A")
+		_ = os.Unsetenv("DOTENV_TEST_B")
 	})
 
 	if got := os.Getenv("DOTENV_TEST_A"); got != "hello" {
@@ -40,7 +41,7 @@ func TestLoadSkipsBlankLinesAndComments(t *testing.T) {
 	if err := Load(path); err != nil {
 		t.Fatalf("Load returned error: %v", err)
 	}
-	t.Cleanup(func() { os.Unsetenv("DOTENV_TEST_C") })
+	t.Cleanup(func() { _ = os.Unsetenv("DOTENV_TEST_C") })
 
 	if got := os.Getenv("DOTENV_TEST_C"); got != "value" {
 		t.Errorf("DOTENV_TEST_C = %q, want %q", got, "value")
@@ -71,5 +72,47 @@ func TestLoadRejectsMalformedLine(t *testing.T) {
 
 	if err := Load(path); err == nil {
 		t.Error("expected an error for a line without '='")
+	}
+}
+
+func TestLoadErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		contents string
+	}{
+		{name: "empty key", contents: " =value\n"},
+		{name: "key the OS rejects", contents: "BAD\x00KEY=value\n"},
+		{name: "line longer than the scanner buffer", contents: "LONG=" + strings.Repeat("x", 70*1024) + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := Load(writeEnvFile(t, tt.contents)); err == nil {
+				t.Fatal("Load returned nil, want an error")
+			}
+		})
+	}
+}
+
+func TestLoadUnreadableFile(t *testing.T) {
+	path := writeEnvFile(t, "A=b\n")
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode-000 file")
+	}
+	if err := Load(path); err == nil {
+		t.Fatal("Load returned nil for an unreadable file, want an error")
+	}
+}
+
+func TestLoadShortValue(t *testing.T) {
+	path := writeEnvFile(t, "DOTENV_TEST_SHORT=x\n")
+	t.Cleanup(func() { _ = os.Unsetenv("DOTENV_TEST_SHORT") })
+	if err := Load(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("DOTENV_TEST_SHORT"); got != "x" {
+		t.Fatalf("DOTENV_TEST_SHORT = %q, want %q", got, "x")
 	}
 }

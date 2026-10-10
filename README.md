@@ -67,7 +67,7 @@ curl -X POST localhost:8081/orders \
 
 ```bash
 docker build -f .docker/Dockerfile -t temporal-gateway .
-docker run -p 8081:8081 \
+docker run -p 8081:8081 -p 8082:8082 \
   -e TEMPORAL_HOST=host.docker.internal:7233 \
   temporal-gateway
 ```
@@ -92,7 +92,7 @@ A pre-built image is published to GHCR on every GitHub Release (see
 |--------------|--------------|------------------------------------------------------------------------|
 | `--config`   | `config.yml` | Path to the gateway config file                                      |
 | `--env`      | `.env`       | Path to a `.env` file to load into the process environment before config parsing (a missing file is not an error) |
-| `--dry-run`  | `false`      | Load and validate the config, API spec, and Temporal connections/namespaces, then exit (0 on success, 1 on the first failure) without starting the HTTP server |
+| `--dry-run`  | `false`      | Load and validate the config, API spec, and Temporal connections/namespaces (one dial attempt, no `temporal.reconnect` retries), then exit (0 on success, 1 on the first failure) without starting the HTTP server |
 
 ## Configuration (`config.yml`)
 
@@ -100,8 +100,13 @@ A pre-built image is published to GHCR on every GitHub Release (see
 server:
   host: "${GATEWAY_HOST:-0.0.0.0}"
   port: ${GATEWAY_PORT:-8081}
+  maxBodyBytes: ${GATEWAY_MAX_BODY_BYTES:-1048576}
+  requestTimeout: "${GATEWAY_REQUEST_TIMEOUT:-25s}"
 
 temporal:
+  reconnect:
+    interval: "${TEMPORAL_RECONNECT_INTERVAL:-5s}"
+    maxAttempts: ${TEMPORAL_RECONNECT_MAX_ATTEMPTS:-0}
   connections:
     - namespace: "${TEMPORAL_NAMESPACE:-default}"
       host: "${TEMPORAL_HOST:-localhost:7233}"
@@ -111,6 +116,11 @@ temporal:
       host: "${TEMPORAL_NOTIFICATIONS_HOST:-localhost:7233}"
       tls:
         enabled: false
+
+health:
+  enabled: ${HEALTH_ENABLED:-true}
+  host: "${HEALTH_HOST:-0.0.0.0}"
+  port: ${HEALTH_PORT:-8082}
 
 otel:
   enabled: ${OTEL_ENABLED:-true}
@@ -122,10 +132,30 @@ otel:
 apiSpec: "./api-spec.yaml"
 ```
 
-- **`temporal.connections`** - one entry per Temporal namespace the gateway should dial.
-  At least one is required, each `namespace` must be unique, and every
-  `x-temporal.triggers` entry in the API spec must name a `namespace` present here
-  (checked at startup, not at request time).
+- **`server.maxBodyBytes`** - largest accepted request body in bytes (default 1 MiB);
+  a larger one gets **413**.
+- **`server.requestTimeout`** - how long one request may spend dispatching to
+  Temporal (default `25s`), e.g. a blocking `getResult`; exceeding it gets **504**.
+  The server's write timeout is derived from it (`+5s`).
+- **`temporal.connections`** - one entry per Temporal namespace the gateway should dial
+  (all dialed concurrently). At least one is required, each `namespace` must be unique,
+  and every `x-temporal.triggers` entry in the API spec must name a `namespace` present
+  here (checked at startup, not at request time). TLS options: `tls.enabled`, an
+  optional mTLS keypair `tls.certPath` + `tls.keyPath` (both or neither), `tls.caPath`
+  (a PEM bundle for private-CA clusters) and `tls.serverName`. `apiKey` authenticates
+  with an API key (e.g. Temporal Cloud) and implies TLS; set it from an environment
+  variable, not inline.
+- **`temporal.reconnect`** - if a namespace's Temporal server can't be reached at
+  startup, the gateway logs a warning and retries the dial every `interval` (a Go
+  duration, default `5s`) instead of exiting. `maxAttempts` caps the number of dials
+  per namespace (`0`, the default, retries until it connects or the process is
+  stopped). The HTTP server only starts once every namespace is connected. Once
+  running, the Temporal SDK reconnects on its own if Temporal goes away; requests
+  made while it's down fail with a Temporal error instead of crashing the gateway.
+  `--dry-run` ignores this and makes a single attempt.
+- **`health`** - liveness and readiness probes, served on their own `host:port`
+  (separate from `server`, so they can't collide with an API spec route). The probe
+  server starts before Temporal is dialed. See [Health probes](#health-probes).
 - **`otel`** - when `enabled` (the default), the gateway starts one span per request and
   exports it via OTLP/gRPC to `endpoint`, propagating trace context into the dispatched
   workflow's Temporal headers. The gRPC connection is non-blocking, so a missing
@@ -140,6 +170,35 @@ apiSpec: "./api-spec.yaml"
   overrides file on top of a shared base.
 - Any scalar value in this file may use `${VAR}` or `${VAR:-default}`; a reference
   without a default fails config loading if the variable is unset.
+
+## Health probes
+
+| Endpoint      | Passes (200) when                                                     | Fails (503) when |
+|---------------|-----------------------------------------------------------------------|------------------|
+| `GET /livez`  | the process is up and answering HTTP                                  | never - no answer at all means the gateway is wedged |
+| `GET /readyz` | every Temporal namespace is connected **and** answers a health check  | still waiting for Temporal at startup, any namespace fails its health check (2s timeout), or the gateway is shutting down |
+
+`/readyz` returns which namespace failed and why, e.g.
+`{"status":"not_ready","checks":{"default":"ok","notifications":"health check error: ..."}}`.
+
+Liveness deliberately doesn't check Temporal: a Temporal outage should take the
+gateway out of the load balancer (readiness), not get it restarted over and over
+(liveness), since a restart can't fix Temporal. Example Kubernetes config:
+
+```yaml
+ports:
+  - name: http
+    containerPort: 8081
+  - name: health
+    containerPort: 8082
+livenessProbe:
+  httpGet: { path: /livez, port: health }
+  periodSeconds: 10
+readinessProbe:
+  httpGet: { path: /readyz, port: health }
+  periodSeconds: 5
+  failureThreshold: 2
+```
 
 ## API specification (`api-spec.yaml`)
 
@@ -214,6 +273,11 @@ Any `x-temporal.triggers` string field may reference incoming request data via
 
 Example: `"order-{path.orderId}-{body.customerId}"`.
 
+Placeholders are checked at startup: an unknown origin, a missing origin, or a
+`{path.X}` that isn't one of the route's path parameters fails spec loading. A request
+that doesn't supply a placeholder's value (e.g. no `customerId` in the body) gets
+**422** and nothing is dispatched.
+
 ### `startWorkflow` options
 
 A `startWorkflow` trigger may set any of the Temporal SDK's `StartWorkflowOptions`:
@@ -244,6 +308,11 @@ gateway before it starts serving traffic.
 - The JSON body is validated against the operation's `requestBody` schema before
   dispatch; a failure returns **422** with a structured error naming every invalid
   field, not just the first.
+- A body over `server.maxBodyBytes` returns **413**; a dispatch exceeding
+  `server.requestTimeout` returns **504** (`TIMEOUT`).
+- Temporal errors are reported with a fixed message per class (not found, already
+  started, invalid argument, permission denied, timed out, failed); the raw error is
+  only logged.
 - A single-trigger operation returns that trigger's result directly, with the HTTP
   status matching its outcome (e.g. `202` for a fresh `startWorkflow`, `409` if it
   attached to an already-running execution instead).
@@ -257,6 +326,8 @@ gateway before it starts serving traffic.
 
 ## CI/CD
 
+- **`.github/workflows/ci.yml`** - on every push and pull request to `main`, fails on
+  unformatted code (`gofmt -s -l`), then runs `go vet ./...` and `go test -race ./...`.
 - **`.docker/Dockerfile`** - multi-stage build producing a ~35 MB, non-root, distroless
   image.
 - **`.github/workflows/docker-release.yml`** - on every published GitHub Release, builds

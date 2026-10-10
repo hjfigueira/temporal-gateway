@@ -1,8 +1,10 @@
 # ADR-005: Accurate start semantics — distinguish "started" from "attached"
 
-**Status:** Accepted
+**Superseded by [ADR-021](../active/0021-started-flag-from-server-not-describe-first.md)** — the goal (never report an attach as STARTED) stands and is restated there; the describe-first RunID comparison was racy and is replaced by the server's `Started` flag.
 
-**Related features:** [`start-workflow-semantics.feature`](../features/start-workflow-semantics.feature)
+**Status:** Deprecated
+
+**Related features:** [`start-workflow-semantics.feature`](../../features/start-workflow-semantics.feature)
 
 ## Context
 
@@ -31,7 +33,7 @@ so a timestamp comparison would be unreliable.
   per call. Accepted as the price of not lying about what happened.
 - `response.Status.IsError()` must treat "attached to an existing run" as
   an error-shaped outcome even though the Go `error` is `nil` — see
-  [ADR-010](0010-response-envelope-separates-gateway-status-from-http-status.md).
+  [ADR-010](../active/0010-response-envelope-separates-gateway-status-from-http-status.md).
 - `DescribeWorkflowExecution` returning `NotFound` is the common case (no
   prior execution) and is treated as "nothing to attach to", not a
   failure.

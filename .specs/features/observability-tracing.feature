@@ -1,4 +1,4 @@
-# See .specs/adr/0013-opentelemetry-tracing-non-blocking.md
+# See .specs/adr/active/0013-opentelemetry-tracing-non-blocking.md
 # Code: internal/telemetry/telemetry.go, internal/temporal/client.go,
 #       internal/gateway/dispatch_handler.go
 
@@ -24,7 +24,7 @@ Feature: OpenTelemetry tracing
     When the request dispatches a startWorkflow (or any) action
     Then the Temporal SDK's tracing interceptor reads the active span
     And propagates its trace context into the outgoing Temporal request's headers
-    So a workflow instrumented with the same tracing continues the same trace
+    # So a workflow instrumented with the same tracing continues the same trace
 
   Scenario: Request logs are enriched with trace/span IDs when tracing is active
     Given otel.enabled is true and the request's span has a valid SpanContext
@@ -35,8 +35,7 @@ Feature: OpenTelemetry tracing
     Given otel.enabled is false
     When telemetry.Setup runs
     Then the global no-op TracerProvider is left in place
-    And every otel.Tracer(...).Start() call elsewhere in the code costs
-      effectively nothing and produces an invalid SpanContext
+    And every otel.Tracer(...).Start() call elsewhere in the code costs effectively nothing and produces an invalid SpanContext
     And request logs are not enriched with trace_id/span_id
 
   Scenario: An unreachable OTLP collector does not block gateway startup

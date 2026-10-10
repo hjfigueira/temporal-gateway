@@ -1,6 +1,8 @@
-# See .specs/adr/0010-response-envelope-separates-gateway-status-from-http-status.md
-# See .specs/adr/0014-http-server-hardening.md
-# Code: internal/response/response.go, main.go (newServer, serve)
+# See .specs/adr/active/0010-response-envelope-separates-gateway-status-from-http-status.md
+# See .specs/adr/active/0014-http-server-hardening.md
+# See .specs/adr/active/0022-per-request-limits-and-sanitized-errors.md
+# Code: internal/response/response.go, main.go (newServer, serve),
+#       internal/gateway/dispatch_handler.go (body limit, deadline, errorResponse)
 
 Feature: Response envelope and HTTP server hardening
   Every response the gateway writes shares a common Envelope{Status,
@@ -9,8 +11,7 @@ Feature: Response envelope and HTTP server hardening
   clients and shuts down gracefully, draining in-flight requests.
 
   Scenario: Every response type embeds Envelope
-    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled,
-      WorkflowAck, BatchResult, validate.Result)
+    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled, WorkflowAck, BatchResult, validate.Result)
     When its JSON is inspected
     Then it includes a top-level "status" field
     And an optional "message" field
@@ -31,8 +32,38 @@ Feature: Response envelope and HTTP server hardening
   Scenario: Slow clients cannot hold a connection open indefinitely
     Given a client that sends request headers very slowly
     When it connects to the gateway
-    Then the connection is closed after ReadHeaderTimeout (10s) if headers
-      are not fully received by then
+    Then the connection is closed after ReadHeaderTimeout (10s) if headers are not fully received by then
+
+  Scenario: A body larger than server.maxBodyBytes is rejected with 413
+    Given server.maxBodyBytes is unset (default 1 MiB)
+    When a request body larger than 1 MiB is sent
+    Then the response is 413 with status "PAYLOAD_TOO_LARGE"
+    And nothing is dispatched to Temporal
+
+  Scenario: A dispatch exceeding server.requestTimeout is answered with 504
+    Given server.requestTimeout is "2s"
+    And a getResult route targets a workflow that doesn't complete in time
+    When the request is made
+    Then after about 2s the response is 504 with status "TIMEOUT"
+    And the Temporal call is cancelled rather than left running
+
+  Scenario: The write timeout always trails the request timeout
+    Given server.requestTimeout is "2m"
+    When the server is built
+    Then its WriteTimeout is 2m5s
+    # So the handler's own 504 is written before the server drops the
+    # connection.
+
+  Scenario: Malformed request limits are rejected at config load
+    Given server.maxBodyBytes is negative, or server.requestTimeout is not a positive duration
+    When the config is loaded
+    Then loading fails naming the offending field
+
+  Scenario: Raw Temporal errors are not returned to callers
+    Given a dispatch fails with an error naming hosts or namespaces
+    When the response is written
+    Then the message is a fixed per-class text (e.g. "temporal request failed") prefixed with the workflow label
+    And the raw error appears only in the gateway's logs
 
   Scenario: Idle keep-alive connections are closed after IdleTimeout
     Given a keep-alive connection that goes quiet
@@ -53,10 +84,8 @@ Feature: Response envelope and HTTP server hardening
     And the shutdown proceeds (does not wait indefinitely)
 
   Scenario: Every fallible startup stage returns an error instead of exiting directly
-    Given any of: dotenv.Load, config.Load, telemetry.Setup, spec.Load,
-      temporal.NewConnections, temporal.ValidateNamespaces fails
+    Given any of: dotenv.Load, config.Load, telemetry.Setup, spec.Load, temporal.NewConnections, temporal.ValidateNamespaces fails
     When run() executes
     Then it returns an error immediately, propagated up to main()
-    And deferred cleanup (closing Temporal connections, flushing telemetry)
-      still runs before the process exits
+    And deferred cleanup (closing Temporal connections, flushing telemetry) still runs before the process exits
     And os.Exit is called exactly once, in main, after run() has fully unwound

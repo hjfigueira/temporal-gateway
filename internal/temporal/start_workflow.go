@@ -14,9 +14,10 @@ import (
 
 // startWorkflow builds a client.StartWorkflowOptions from binding and calls
 // ExecuteWorkflow. Because ExecuteWorkflow can succeed without creating a
-// new run (see the priorRunID comment below), the returned Status only
-// claims StatusStarted when a fresh run was actually created; otherwise it
-// reports the pre-existing run's real state via classifyExistingRun.
+// new run (see the comment above the call), the returned Status only
+// claims StatusStarted when the server reports a fresh run was created;
+// otherwise it reports the existing run's real state via
+// classifyExistingRun.
 func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
 	taskQueue := binding.TaskQueue
 	if taskQueue == "" {
@@ -80,33 +81,20 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 
 	// ExecuteWorkflow can succeed (no error) without creating a new run: if
 	// a workflow with this ID already exists, WorkflowIDConflictPolicy or
-	// WorkflowIDReusePolicy may allow the call to silently attach to that
-	// existing execution and return its RunID instead of erroring - see
-	// client.StartWorkflowOptions.WorkflowExecutionErrorWhenAlreadyStarted.
-	// Capture any such execution's identity and status before starting, so
-	// we can tell the two cases apart by comparing RunIDs afterwards -
-	// comparing timestamps instead would be unreliable, since ordinary
-	// request latency can easily exceed the gap between two calls.
-	var priorRunID string
-	var priorStatus enumspb.WorkflowExecutionStatus
-	if desc, descErr := conn.Client.DescribeWorkflowExecution(ctx, workflowID, ""); descErr == nil {
-		if info := desc.GetWorkflowExecutionInfo(); info != nil {
-			priorRunID = info.GetExecution().GetRunId()
-			priorStatus = info.GetStatus()
-		}
-	}
-	// If the describe call errors (most commonly NotFound, meaning no
-	// workflow with this ID exists yet), priorRunID stays empty, which
-	// below is correctly read as "nothing to attach to".
-
-	run, err := conn.Client.ExecuteWorkflow(ctx, options, binding.WorkflowType, args...)
+	// WorkflowIDReusePolicy may let the call attach to that execution and
+	// return its RunID instead of erroring. The server says which happened
+	// in StartWorkflowExecutionResponse.Started, captured via
+	// withStartedFlag (see started.go) - atomically, unlike describing the
+	// workflow first, which two concurrent starts would both see as absent.
+	startCtx, started := withStartedFlag(ctx)
+	run, err := conn.Client.ExecuteWorkflow(startCtx, options, binding.WorkflowType, args...)
 	if err != nil {
 		return nil, err
 	}
 
 	status, message := response.StatusStarted, ""
-	if priorRunID != "" && run.GetRunID() == priorRunID {
-		status, message = classifyExistingRun(priorStatus)
+	if !*started {
+		status, message = existingRunStatus(ctx, conn, run.GetID(), run.GetRunID())
 	}
 
 	return response.WorkflowStarted{
@@ -114,6 +102,17 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 		WorkflowID: run.GetID(),
 		RunID:      run.GetRunID(),
 	}, nil
+}
+
+// existingRunStatus describes the run a start attached to, to report its
+// real state. It's informational only - whether a new run was created is
+// already decided - so a failed describe falls back to "already running".
+func existingRunStatus(ctx context.Context, conn *Connection, workflowID, runID string) (response.Status, string) {
+	desc, err := conn.Client.DescribeWorkflowExecution(ctx, workflowID, runID)
+	if err != nil {
+		return classifyExistingRun(enumspb.WORKFLOW_EXECUTION_STATUS_UNSPECIFIED)
+	}
+	return classifyExistingRun(desc.GetWorkflowExecutionInfo().GetStatus())
 }
 
 // classifyExistingRun maps a pre-existing workflow's current execution

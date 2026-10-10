@@ -18,7 +18,7 @@ COPY --from=build /out/temporal-gateway ./temporal-gateway
 COPY config.yml api-spec.yaml ./
 
 USER nonroot:nonroot
-EXPOSE 8081
+EXPOSE 8081 8082
 
 # Soft memory cap: the runtime GCs more aggressively as usage approaches
 # this instead of letting RSS grow to ~2x live heap under load. Override

@@ -1,6 +1,7 @@
 package temporal
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -63,11 +64,14 @@ func TestSearchAttributeUpdateRejectsTypeMismatch(t *testing.T) {
 		{Name: "n", Type: "float", Value: "1.5"},
 		{Name: "n", Type: "time", Value: "not-a-timestamp"},
 		{Name: "n", Type: "keywordList", Value: "not-a-list"},
+		{Name: "n", Type: "keyword", Value: 1},
+		{Name: "n", Type: "time", Value: 1},
+		{Name: "n", Type: "keywordList", Value: []any{"a", 1}},
 		{Name: "n", Type: "bogus", Value: "x"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.Type, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s/%v", tt.Type, tt.Value), func(t *testing.T) {
 			if _, err := searchAttributeUpdate(tt); err == nil {
 				t.Errorf("searchAttributeUpdate(%+v) expected an error, got nil", tt)
 			}

@@ -1,13 +1,15 @@
-# See .specs/adr/0004-origin-field-placeholders-for-workflow-id-templating.md
-# Code: internal/gateway/template.go
+# See .specs/adr/active/0004-origin-field-placeholders-for-workflow-id-templating.md
+# See .specs/adr/active/0020-unresolved-workflow-id-placeholders-are-rejected.md
+# Code: internal/gateway/template.go, internal/gateway/dispatch_handler.go,
+#       internal/spec/template.go
 
 Feature: Workflow ID templating
   Any x-temporal string field (chiefly workflowId) may embed "{origin.field}"
   placeholders, resolved per request from the incoming HTTP call: path,
   body, query, or header - plus the reserved "{uuidv7}" keyword, which needs
   no origin and generates a fresh UUIDv7 per occurrence. A placeholder that
-  can't be resolved is left untouched in the rendered string rather than
-  failing the request.
+  can never resolve fails spec loading; one the request can't satisfy fails
+  that request with 422 before anything is dispatched.
 
   Background:
     Given a trigger's workflowId is a template string containing placeholders
@@ -37,12 +39,13 @@ Feature: Workflow ID templating
     Then each rendering produces a different, valid UUIDv7
     And neither rendering depends on any request field being present
 
-  Scenario: An unresolved placeholder is left untouched
-    Given workflowId is "order-{body.missingField}"
-    And the request body has no "missingField"
-    When the template is rendered
-    Then the resulting workflow ID is literally "order-{body.missingField}"
-    And the request is not rejected because of it
+  Scenario: An unresolved placeholder rejects the request without dispatching
+    Given an operation with two triggers whose workflowIds use "{body.orderId}"
+    And the request body has no "orderId"
+    When the request is handled
+    Then the response is 422 with status "INVALID_REQUEST"
+    And the message names "{body.orderId}"
+    And neither trigger is dispatched
 
   Scenario: A non-string JSON body field stringifies for use in a template
     Given workflowId is "order-{body.metadata}"
@@ -51,8 +54,18 @@ Feature: Workflow ID templating
     Then the object renders as its Go-syntax representation
     And rendering does not error or reject the request
 
-  Scenario: An unknown origin resolves to nothing
+  Scenario: An unknown origin fails spec loading
     Given workflowId contains "{cookie.sessionId}"
-    When the template is rendered
-    Then "cookie" is not a recognized origin (only path/body/query/header/uuidv7 are)
-    And the placeholder is left untouched, same as an unresolved field
+    When the API spec is loaded
+    Then loading fails naming the unknown origin "cookie"
+    # Only path/body/query/header (case-insensitive) and uuidv7 are valid.
+
+  Scenario: A path placeholder must name one of the route's path parameters
+    Given the route "/orders/{orderId}" and workflowId "order-{path.id}"
+    When the API spec is loaded
+    Then loading fails saying {path.id} names no path parameter of this route
+
+  Scenario: A placeholder without an origin fails spec loading
+    Given workflowId is "order-{orderId}"
+    When the API spec is loaded
+    Then loading fails saying it must be {uuidv7} or {origin.field}

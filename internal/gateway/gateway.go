@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"temporal-gateway/internal/spec"
 )
@@ -29,15 +30,25 @@ var statusByAction = map[spec.TemporalAction]int{
 	spec.ActionGetResult:         http.StatusOK,
 }
 
+// Options are the per-request limits every generated handler enforces.
+// A zero field disables that limit.
+type Options struct {
+	// MaxBodyBytes caps the request body; a larger one gets 413.
+	MaxBodyBytes int64
+	// RequestTimeout bounds the Temporal dispatch (notably a blocking
+	// getResult); exceeding it gets 504.
+	RequestTimeout time.Duration
+}
+
 // NewHandler registers one handler per route in apiSpec, keyed by
 // "METHOD /path" using Go's http.ServeMux pattern syntax. OpenAPI path
 // templates ("/orders/{orderId}") already match that syntax directly.
-func NewHandler(apiSpec *spec.Spec, dispatcher Dispatcher, logger *slog.Logger) http.Handler {
+func NewHandler(apiSpec *spec.Spec, dispatcher Dispatcher, opts Options, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	for _, route := range apiSpec.Routes() {
 		pattern := route.Method + " " + route.Path
-		mux.HandleFunc(pattern, dispatchHandler(route, dispatcher, logger))
+		mux.HandleFunc(pattern, dispatchHandler(route, dispatcher, opts, logger))
 	}
 
 	return mux

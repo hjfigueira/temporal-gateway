@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`spec-driven-routing.feature`](../features/spec-driven-routing.feature)
+**Related features:** [`spec-driven-routing.feature`](../../features/spec-driven-routing.feature)
 
 ## Context
 

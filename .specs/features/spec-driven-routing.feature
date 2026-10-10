@@ -1,4 +1,4 @@
-# See .specs/adr/0001-spec-driven-architecture-no-handler-code.md
+# See .specs/adr/active/0001-spec-driven-architecture-no-handler-code.md
 # Code: main.go, internal/spec/spec.go, internal/spec/route.go,
 #       internal/gateway/gateway.go
 
@@ -35,7 +35,7 @@ Feature: Spec-driven routing
     Given a spec with multiple paths and methods
     When Spec.Routes() is called
     Then the result is sorted by path, then by method
-    So startup logging and route enumeration are deterministic across runs
+    # So startup logging and route enumeration are deterministic across runs
 
   Scenario: An operation missing x-temporal.triggers fails spec validation
     Given an operation with no "x-temporal.triggers" entries

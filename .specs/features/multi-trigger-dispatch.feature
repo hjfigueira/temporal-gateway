@@ -1,4 +1,4 @@
-# See .specs/adr/0002-triggers-list-and-returnstrategy-for-multi-workflow-fan-out.md
+# See .specs/adr/active/0002-triggers-list-and-returnstrategy-for-multi-workflow-fan-out.md
 # Code: internal/gateway/dispatch_handler.go, internal/spec/spec.go
 #       (TemporalSpec, ReturnStrategy), internal/response/response.go
 #       (BatchResult)
@@ -69,11 +69,10 @@ Feature: Multi-trigger dispatch and returnStrategy
     When the operation is dispatched
     Then the response's "results" array has one item per trigger
     And each item identifies which workflow/action it is about
-    So the caller can tell exactly which trigger(s) succeeded or failed
-    Regardless of which single top-level status/HTTP code was chosen
+    # So the caller can tell exactly which trigger(s) succeeded or failed
+    # Regardless of which single top-level status/HTTP code was chosen
 
   Scenario: Unknown returnStrategy value fails spec validation
-    Given x-temporal.returnStrategy is set to a value other than
-      "acceptPartial" or "allOrNothing" (and not empty)
+    Given x-temporal.returnStrategy is set to a value other than "acceptPartial" or "allOrNothing" (and not empty)
     When the spec is loaded
     Then spec loading fails before the server starts

@@ -4,9 +4,9 @@
 
 **Related features:** every `.feature` file touches this to some degree;
 see especially
-[`multi-namespace-temporal.feature`](../features/multi-namespace-temporal.feature)
+[`multi-namespace-temporal.feature`](../../features/multi-namespace-temporal.feature)
 and
-[`environment-config.feature`](../features/environment-config.feature).
+[`environment-config.feature`](../../features/environment-config.feature).
 
 ## Context
 
@@ -41,3 +41,7 @@ starting the server, for use in CI or a pre-deploy check.
   [ADR-003](0003-multi-namespace-temporal-explicit-per-trigger.md)) still
   surfaces as an ordinary Temporal error at request time; this is an
   accepted gap, not an oversight.
+- An *unreachable* Temporal at startup is not treated as a validation
+  failure: the dial is retried per `temporal.reconnect` (except under
+  `--dry-run`) - see
+  [ADR-018](0018-retry-temporal-dial-at-startup.md).

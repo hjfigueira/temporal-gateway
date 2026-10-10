@@ -10,6 +10,12 @@
 server:
   host: "${GATEWAY_HOST:-0.0.0.0}"
   port: ${GATEWAY_PORT:-8081}
+  # Largest accepted request body, in bytes; larger bodies get 413.
+  maxBodyBytes: ${GATEWAY_MAX_BODY_BYTES:-1048576}
+  # How long one request may spend dispatching to Temporal (e.g. a blocking
+  # getResult) before it's answered with 504. The server's write timeout is
+  # derived from it (+5s).
+  requestTimeout: "${GATEWAY_REQUEST_TIMEOUT:-25s}"
 
 # Every Temporal namespace the gateway dials a client for at startup. A
 # single gateway process can serve routes against several namespaces - even
@@ -17,6 +23,13 @@ server:
 # names which one it targets via its own "namespace" field, which must
 # match one of these entries' namespace.
 temporal:
+  # If a namespace's Temporal server is unreachable at startup, the gateway
+  # keeps retrying the dial every "interval" instead of exiting, until it
+  # connects, "maxAttempts" dials have failed (0 = retry forever), or the
+  # process is stopped. --dry-run always makes a single attempt.
+  reconnect:
+    interval: "${TEMPORAL_RECONNECT_INTERVAL:-5s}"
+    maxAttempts: ${TEMPORAL_RECONNECT_MAX_ATTEMPTS:-0}
   connections:
     - namespace: "${TEMPORAL_NAMESPACE:-default}"
       host: "${TEMPORAL_HOST:-localhost:7233}"
@@ -26,6 +39,25 @@ temporal:
       host: "${TEMPORAL_NOTIFICATIONS_HOST:-localhost:7233}"
       tls:
         enabled: false
+    # A TLS / Temporal Cloud connection looks like:
+    # - namespace: "my-ns.a1b2c"
+    #   host: "my-ns.a1b2c.tmprl.cloud:7233"
+    #   apiKey: <an env var reference> # implies TLS; never put the key inline
+    #   tls:
+    #     enabled: true
+    #     certPath: "/certs/client.pem" # optional mTLS keypair (both or neither)
+    #     keyPath: "/certs/client.key"
+    #     caPath: "/certs/ca.pem"       # optional private CA bundle
+    #     serverName: "temporal.internal" # optional SNI / verification override
+
+# Liveness (GET /livez) and readiness (GET /readyz) probes, served on their
+# own port so they never collide with api-spec.yaml routes. Liveness passes
+# whenever the process is up; readiness passes only while every Temporal
+# namespace is connected and healthy, and fails during shutdown.
+health:
+  enabled: ${HEALTH_ENABLED:-true}
+  host: "${HEALTH_HOST:-0.0.0.0}"
+  port: ${HEALTH_PORT:-8082}
 
 # OpenTelemetry distributed tracing. When enabled, the gateway starts one
 # span per HTTP request and exports it via OTLP/gRPC to endpoint; that

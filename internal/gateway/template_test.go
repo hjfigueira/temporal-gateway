@@ -19,26 +19,30 @@ func TestRenderTemplateSources(t *testing.T) {
 	resolve := fieldResolver(req, pathParams, body)
 
 	tests := []struct {
-		name string
-		tmpl string
-		want string
+		name       string
+		tmpl       string
+		want       string
+		unresolved bool
 	}{
-		{"path origin", "order-{path.orderId}", "order-o1"},
-		{"body origin string", "customer-{body.customerId}", "customer-c1"},
-		{"body origin number", "priority-{body.priority}", "priority-2"},
-		{"query origin", "region-{query.region}", "region-eu"},
-		{"header origin", "trace-{header.X-Request-Id}", "trace-req-123"},
-		{"header origin lowercase", "trace-{header.x-request-id}", "trace-req-123"},
-		{"unresolved field left untouched", "unknown-{path.missing}", "unknown-{path.missing}"},
-		{"unknown origin left untouched", "unknown-{env.missing}", "unknown-{env.missing}"},
-		{"missing origin left untouched", "bare-{orderId}", "bare-{orderId}"},
+		{"path origin", "order-{path.orderId}", "order-o1", false},
+		{"body origin string", "customer-{body.customerId}", "customer-c1", false},
+		{"body origin number", "priority-{body.priority}", "priority-2", false},
+		{"query origin", "region-{query.region}", "region-eu", false},
+		{"header origin", "trace-{header.X-Request-Id}", "trace-req-123", false},
+		{"header origin lowercase", "trace-{header.x-request-id}", "trace-req-123", false},
+		{"unresolved field reported", "unknown-{path.missing}", "unknown-{path.missing}", true},
+		{"unknown origin reported", "unknown-{env.missing}", "unknown-{env.missing}", true},
+		{"missing origin reported", "bare-{orderId}", "bare-{orderId}", true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := renderTemplate(tt.tmpl, resolve)
+			got, unresolved := renderTemplate(tt.tmpl, resolve)
 			if got != tt.want {
 				t.Errorf("renderTemplate(%q) = %q, want %q", tt.tmpl, got, tt.want)
+			}
+			if (len(unresolved) > 0) != tt.unresolved {
+				t.Errorf("renderTemplate(%q) unresolved = %v, want unresolved=%v", tt.tmpl, unresolved, tt.unresolved)
 			}
 		})
 	}
@@ -48,7 +52,7 @@ func TestRenderTemplateUUIDv7(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(""))
 	resolve := fieldResolver(req, nil, nil)
 
-	got := renderTemplate("order-{uuidv7}", resolve)
+	got, _ := renderTemplate("order-{uuidv7}", resolve)
 	id := strings.TrimPrefix(got, "order-")
 
 	parsed, err := uuid.Parse(id)
@@ -60,13 +64,13 @@ func TestRenderTemplateUUIDv7(t *testing.T) {
 	}
 
 	// Case-insensitive keyword.
-	if got3 := renderTemplate("{UUIDv7}", resolve); got3 == "{UUIDv7}" {
+	if got3, _ := renderTemplate("{UUIDv7}", resolve); got3 == "{UUIDv7}" {
 		t.Errorf("UUIDv7 keyword should be case-insensitive, got %q", got3)
 	}
 
 	// A fresh value is generated per occurrence.
-	first := renderTemplate("{uuidv7}", resolve)
-	second := renderTemplate("{uuidv7}", resolve)
+	first, _ := renderTemplate("{uuidv7}", resolve)
+	second, _ := renderTemplate("{uuidv7}", resolve)
 	if first == second {
 		t.Errorf("expected distinct uuids per render, got %q twice", first)
 	}

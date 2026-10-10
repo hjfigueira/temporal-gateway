@@ -9,15 +9,65 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"temporal-gateway/internal/envsubst"
 )
 
+// Defaults for ServerConfig's optional request limits.
+const (
+	defaultMaxBodyBytes   = 1 << 20 // 1 MiB
+	defaultRequestTimeout = 25 * time.Second
+)
+
 type ServerConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+	// MaxBodyBytes caps a request body's size; larger bodies get 413.
+	// 0 (unset) means defaultMaxBodyBytes.
+	MaxBodyBytes int64 `yaml:"maxBodyBytes,omitempty"`
+	// RequestTimeout bounds how long one request may spend dispatching to
+	// Temporal (notably a blocking getResult), as a time.ParseDuration
+	// string. Unset means defaultRequestTimeout.
+	RequestTimeout string `yaml:"requestTimeout,omitempty"`
+}
+
+// MaxBodyBytesOrDefault returns MaxBodyBytes, or defaultMaxBodyBytes when
+// unset.
+func (s ServerConfig) MaxBodyBytesOrDefault() int64 {
+	if s.MaxBodyBytes == 0 {
+		return defaultMaxBodyBytes
+	}
+	return s.MaxBodyBytes
+}
+
+// RequestTimeoutDuration returns RequestTimeout parsed, or
+// defaultRequestTimeout when unset. Only meaningful after validate has
+// accepted RequestTimeout.
+func (s ServerConfig) RequestTimeoutDuration() time.Duration {
+	if s.RequestTimeout == "" {
+		return defaultRequestTimeout
+	}
+	d, _ := time.ParseDuration(s.RequestTimeout)
+	return d
+}
+
+func (s ServerConfig) validate() error {
+	if s.MaxBodyBytes < 0 {
+		return fmt.Errorf("server.maxBodyBytes must be >= 0 (0 means the 1 MiB default), got %d", s.MaxBodyBytes)
+	}
+	if s.RequestTimeout != "" {
+		d, err := time.ParseDuration(s.RequestTimeout)
+		if err != nil {
+			return fmt.Errorf("server.requestTimeout: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("server.requestTimeout must be positive, got %q", s.RequestTimeout)
+		}
+	}
+	return nil
 }
 
 type APIKeyAuthConfig struct {
@@ -73,6 +123,29 @@ type OTelConfig struct {
 	SampleRatio float64 `yaml:"sampleRatio"`
 }
 
+// HealthConfig configures the liveness (/livez) and readiness (/readyz)
+// probe server (see internal/health). It listens on its own Host:Port,
+// separate from the API server, and starts before Temporal is dialed so
+// liveness passes while the gateway is still waiting for Temporal.
+type HealthConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Host    string `yaml:"host"`
+	Port    int    `yaml:"port"`
+}
+
+func (h HealthConfig) validate(server ServerConfig) error {
+	if !h.Enabled {
+		return nil
+	}
+	if h.Port < 1 || h.Port > 65535 {
+		return fmt.Errorf("health.port must be between 1 and 65535, got %d", h.Port)
+	}
+	if h.Port == server.Port {
+		return fmt.Errorf("health.port must differ from server.port (%d)", server.Port)
+	}
+	return nil
+}
+
 // GatewayConfig is the root of the main configuration file. It links to one
 // or more API specifications (APISpec) that define the actual HTTP surface.
 type GatewayConfig struct {
@@ -82,6 +155,7 @@ type GatewayConfig struct {
 	Auth        AuthConfig         `yaml:"auth"`
 	Middlewares []MiddlewareConfig `yaml:"middlewares"`
 	OTel        OTelConfig         `yaml:"otel"`
+	Health      HealthConfig       `yaml:"health"`
 
 	// baseDir is the directory containing the config file, used to resolve
 	// a relative APISpec path regardless of the process's working directory.
@@ -110,11 +184,19 @@ func Load(path string) (*GatewayConfig, error) {
 		return nil, fmt.Errorf("config: parse %q: %w", absPath, err)
 	}
 
+	if err := cfg.Server.validate(); err != nil {
+		return nil, fmt.Errorf("config: %q: %w", absPath, err)
+	}
+
 	if err := cfg.APISpec.validate(); err != nil {
 		return nil, fmt.Errorf("config: %q: %w", absPath, err)
 	}
 
 	if err := cfg.Temporal.validate(); err != nil {
+		return nil, fmt.Errorf("config: %q: %w", absPath, err)
+	}
+
+	if err := cfg.Health.validate(cfg.Server); err != nil {
 		return nil, fmt.Errorf("config: %q: %w", absPath, err)
 	}
 

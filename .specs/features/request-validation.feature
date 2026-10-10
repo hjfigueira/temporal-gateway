@@ -1,4 +1,4 @@
-# See .specs/adr/0009-json-schema-lite-validator-with-laravel-style-messages.md
+# See .specs/adr/active/0009-json-schema-lite-validator-with-laravel-style-messages.md
 # Code: internal/gateway/body_validation.go, internal/validate/validate.go,
 #       internal/validate/checks.go, internal/validate/messages.go
 

@@ -32,12 +32,7 @@ func Setup(ctx context.Context, cfg config.OTelConfig) (shutdown func(context.Co
 		return func(context.Context) error { return nil }, nil
 	}
 
-	res, err := resource.New(ctx, resource.WithAttributes(
-		semconv.ServiceName(cfg.ServiceName),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: build resource: %w", err)
-	}
+	res := resource.NewWithAttributes(semconv.SchemaURL, semconv.ServiceName(cfg.ServiceName))
 
 	exporterOpts := []otlptracegrpc.Option{otlptracegrpc.WithEndpoint(cfg.Endpoint)}
 	if cfg.Insecure {

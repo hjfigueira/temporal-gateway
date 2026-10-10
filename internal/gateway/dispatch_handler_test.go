@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.temporal.io/api/serviceerror"
 
@@ -113,7 +114,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 
 	t.Run("both bindings dispatch when all succeed", func(t *testing.T) {
 		dispatcher := &trackingDispatcher{}
-		handler := dispatchHandler(twoBindingRoute(), dispatcher, logger)
+		handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
 
 		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 		rec := httptest.NewRecorder()
@@ -151,7 +152,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 	// breakdown so the caller can tell exactly which one failed and why.
 	t.Run("the first binding failing does not prevent the second from being attempted", func(t *testing.T) {
 		dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true}}
-		handler := dispatchHandler(twoBindingRoute(), dispatcher, logger)
+		handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
 
 		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 		rec := httptest.NewRecorder()
@@ -195,7 +196,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 	// out any accidental dependency on slice order.
 	t.Run("the second binding failing does not prevent the first from being attempted", func(t *testing.T) {
 		dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1-notification": true}}
-		handler := dispatchHandler(twoBindingRoute(), dispatcher, logger)
+		handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
 
 		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 		rec := httptest.NewRecorder()
@@ -244,7 +245,7 @@ func TestDispatchHandlerRunsAllBindingsEvenWhenOneFails(t *testing.T) {
 func TestDispatchHandlerNoBindingsStartedIsNotMultiStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true, "order-o1-notification": true}}
-	handler := dispatchHandler(twoBindingRoute(), dispatcher, logger)
+	handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
 
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 	rec := httptest.NewRecorder()
@@ -279,7 +280,7 @@ func TestDispatchHandlerAttachingToExistingRunIsNotStarted(t *testing.T) {
 		route := twoBindingRoute()
 		route.Operation.Temporal.Triggers = route.Operation.Temporal.Triggers[:1]
 		dispatcher := &trackingDispatcher{existingIDs: map[string]bool{"order-o1": true}}
-		handler := dispatchHandler(route, dispatcher, logger)
+		handler := dispatchHandler(route, dispatcher, Options{}, logger)
 
 		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 		rec := httptest.NewRecorder()
@@ -303,7 +304,7 @@ func TestDispatchHandlerAttachingToExistingRunIsNotStarted(t *testing.T) {
 
 	t.Run("one binding attaching to an existing run while another genuinely starts is a multi-status mix", func(t *testing.T) {
 		dispatcher := &trackingDispatcher{existingIDs: map[string]bool{"order-o1": true}}
-		handler := dispatchHandler(twoBindingRoute(), dispatcher, logger)
+		handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
 
 		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 		rec := httptest.NewRecorder()
@@ -338,7 +339,7 @@ func TestDispatchHandlerAttachingToExistingRunIsNotStarted(t *testing.T) {
 func TestDispatchHandlerSingleBindingFailureKeepsSpecificStatus(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &failingDispatcher{err: serviceerror.NewNotFound("workflow not found")}
-	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, logger)
+	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, Options{}, logger)
 
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 	rec := httptest.NewRecorder()
@@ -366,7 +367,7 @@ func TestDispatchHandlerSingleBindingFailureKeepsSpecificStatus(t *testing.T) {
 func TestDispatchHandlerAllOrNothingRejectsAnyIncompleteTrigger(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true}}
-	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, Options{}, logger)
 
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 	rec := httptest.NewRecorder()
@@ -400,7 +401,7 @@ func TestDispatchHandlerAllOrNothingRejectsAnyIncompleteTrigger(t *testing.T) {
 func TestDispatchHandlerAllOrNothingAcceptsUniformSuccess(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &trackingDispatcher{}
-	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, Options{}, logger)
 
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 	rec := httptest.NewRecorder()
@@ -427,7 +428,7 @@ func TestDispatchHandlerAllOrNothingAcceptsUniformSuccess(t *testing.T) {
 func TestDispatchHandlerAllOrNothingRejectsUniformFailure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &trackingDispatcher{failIDs: map[string]bool{"order-o1": true, "order-o1-notification": true}}
-	handler := dispatchHandler(allOrNothingRoute(), dispatcher, logger)
+	handler := dispatchHandler(allOrNothingRoute(), dispatcher, Options{}, logger)
 
 	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
 	rec := httptest.NewRecorder()
@@ -435,5 +436,97 @@ func TestDispatchHandlerAllOrNothingRejectsUniformFailure(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want %d (body: %s)", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+// deadlineDispatcher blocks until ctx is done and returns its error, like a
+// getResult on a workflow that outlives the request timeout.
+type deadlineDispatcher struct{}
+
+func (deadlineDispatcher) Dispatch(ctx context.Context, _ spec.TemporalBinding, _ string, _ any) (any, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func decodeEnvelope(t *testing.T, rec *httptest.ResponseRecorder) response.Envelope {
+	t.Helper()
+	var envelope response.Envelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("response body is not a JSON envelope: %v (body: %s)", err, rec.Body.String())
+	}
+	return envelope
+}
+
+func TestDispatchHandlerRejectsOversizedBody(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{}
+	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, Options{MaxBodyBytes: 16}, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"`+strings.Repeat("x", 64)+`"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := decodeEnvelope(t, rec).Status; got != response.StatusPayloadTooLarge {
+		t.Errorf("status = %q, want %q", got, response.StatusPayloadTooLarge)
+	}
+	if len(dispatcher.seen) != 0 {
+		t.Errorf("dispatched %v, want nothing dispatched", dispatcher.seen)
+	}
+}
+
+func TestDispatchHandlerRejectsUnresolvedPlaceholderWithoutDispatching(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &trackingDispatcher{}
+	handler := dispatchHandler(twoBindingRoute(), dispatcher, Options{}, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"customerId":"c1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (body: %s)", rec.Code, rec.Body.String())
+	}
+	envelope := decodeEnvelope(t, rec)
+	if envelope.Status != response.StatusInvalidRequest || !strings.Contains(envelope.Message, "{body.orderId}") {
+		t.Errorf("envelope = %+v, want INVALID_REQUEST naming {body.orderId}", envelope)
+	}
+	if len(dispatcher.seen) != 0 {
+		t.Errorf("dispatched %v, want nothing dispatched", dispatcher.seen)
+	}
+}
+
+func TestDispatchHandlerTimesOutSlowDispatch(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler := dispatchHandler(twoBindingRouteSingle(), deadlineDispatcher{}, Options{RequestTimeout: 10 * time.Millisecond}, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := decodeEnvelope(t, rec).Status; got != response.StatusTimeout {
+		t.Errorf("status = %q, want %q", got, response.StatusTimeout)
+	}
+}
+
+func TestDispatchHandlerDoesNotLeakRawTemporalErrors(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &failingDispatcher{err: serviceerror.NewUnavailable("dial tcp 10.0.0.7:7233: namespace payments-prod unreachable")}
+	handler := dispatchHandler(twoBindingRouteSingle(), dispatcher, Options{}, logger)
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, "10.0.0.7") || strings.Contains(body, "payments-prod") {
+		t.Errorf("response leaks the raw Temporal error: %s", body)
 	}
 }

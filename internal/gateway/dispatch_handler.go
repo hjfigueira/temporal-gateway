@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel"
@@ -46,11 +47,9 @@ type statusGetter interface {
 // asked. A nil Go error alone isn't enough: e.g. a startWorkflow binding
 // can return successfully while attaching to an already-existing run
 // instead of creating a new one (see internal/temporal.classifyExistingRun),
-// which is a Status.IsError() outcome despite there being no error.
+// which is a Status.IsError() outcome despite there being no error. Only
+// called for outcomes whose err is nil (see collectResults).
 func (o dispatchOutcome) succeeded() bool {
-	if o.err != nil {
-		return false
-	}
 	if sg, ok := o.result.(statusGetter); ok {
 		return !sg.GetStatus().IsError()
 	}
@@ -72,7 +71,7 @@ func (o dispatchOutcome) succeeded() bool {
 // outcome (all started, or none did) getting an ordinary single status
 // code; under "allOrNothing", anything short of every trigger succeeding is
 // reported as HTTP 409 Conflict.
-func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logger) http.HandlerFunc {
+func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
 	bindings := route.Operation.Temporal.Triggers
 	returnStrategy := route.Operation.Temporal.Strategy()
@@ -115,8 +114,17 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 			// request handling is already complete either way), but discard
 			// it explicitly rather than leaving it unchecked.
 			defer func() { _ = r.Body.Close() }()
+			if opts.MaxBodyBytes > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, opts.MaxBodyBytes)
+			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 				span.RecordError(err)
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					span.SetStatus(codes.Error, "request body too large")
+					writeJSON(w, http.StatusRequestEntityTooLarge, response.Envelope{Status: response.StatusPayloadTooLarge, Message: fmt.Sprintf("request body exceeds %d bytes", tooLarge.Limit)})
+					return
+				}
 				span.SetStatus(codes.Error, "invalid JSON body")
 				writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
 				return
@@ -129,9 +137,30 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 			return
 		}
 
+		// Render every workflowId before dispatching any, so a request
+		// missing a templated field dispatches nothing rather than acting
+		// on a literal "{...}" ID shared by every such request.
 		resolve := fieldResolver(r, pathParams, body)
+		workflowIDs := make([]string, len(bindings))
+		var unresolved []string
+		for i, binding := range bindings {
+			var missing []string
+			workflowIDs[i], missing = renderTemplate(binding.WorkflowID, resolve)
+			unresolved = append(unresolved, missing...)
+		}
+		if len(unresolved) > 0 {
+			span.SetStatus(codes.Error, "unresolved workflowId placeholder")
+			writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "request is missing values for workflowId placeholder(s): " + strings.Join(unresolved, ", ")})
+			return
+		}
 
-		outcomes := dispatchAll(ctx, dispatcher, bindings, resolve, body)
+		if opts.RequestTimeout > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, opts.RequestTimeout)
+			defer cancel()
+		}
+
+		outcomes := dispatchAll(ctx, dispatcher, bindings, workflowIDs, body)
 		items, statuses, succeeded := collectResults(route, bindings, outcomes, requestLogger)
 
 		span.SetAttributes(
@@ -150,20 +179,19 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, logger *slog.Logge
 	}
 }
 
-// dispatchAll runs dispatcher.Dispatch for every binding concurrently,
-// rendering each one's workflowId template first. Running them in parallel,
+// dispatchAll runs dispatcher.Dispatch for every binding concurrently, each
+// with its already-rendered workflowIDs[i]. Running them in parallel,
 // rather than stopping at the first failure, means one bad binding can't
 // prevent the others in the same request from starting.
-func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.TemporalBinding, resolve func(string) (string, bool), body any) []dispatchOutcome {
+func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.TemporalBinding, workflowIDs []string, body any) []dispatchOutcome {
 	outcomes := make([]dispatchOutcome, len(bindings))
 
 	// The common case is a single binding per operation, where spawning a
 	// goroutine just for fan-out buys no parallelism - it only costs a
 	// stack allocation and a scheduling round trip on every request.
 	if len(bindings) == 1 {
-		workflowID := renderTemplate(bindings[0].WorkflowID, resolve)
-		result, err := dispatcher.Dispatch(ctx, bindings[0], workflowID, body)
-		outcomes[0] = dispatchOutcome{workflowID: workflowID, result: result, err: err}
+		result, err := dispatcher.Dispatch(ctx, bindings[0], workflowIDs[0], body)
+		outcomes[0] = dispatchOutcome{workflowID: workflowIDs[0], result: result, err: err}
 		return outcomes
 	}
 
@@ -172,9 +200,8 @@ func dispatchAll(ctx context.Context, dispatcher Dispatcher, bindings []spec.Tem
 		wg.Add(1)
 		go func(i int, binding spec.TemporalBinding) {
 			defer wg.Done()
-			workflowID := renderTemplate(binding.WorkflowID, resolve)
-			result, err := dispatcher.Dispatch(ctx, binding, workflowID, body)
-			outcomes[i] = dispatchOutcome{workflowID: workflowID, result: result, err: err}
+			result, err := dispatcher.Dispatch(ctx, binding, workflowIDs[i], body)
+			outcomes[i] = dispatchOutcome{workflowID: workflowIDs[i], result: result, err: err}
 		}(i, binding)
 	}
 	wg.Wait()
@@ -301,30 +328,37 @@ func workflowLabel(binding spec.TemporalBinding, workflowID string) string {
 	return fmt.Sprintf("%s (%s)", name, workflowID)
 }
 
-// errorResponse maps a Temporal service error to a response.Status, an HTTP
-// status, and a message.
+// errorResponse maps a dispatch error to a response.Status, an HTTP status,
+// and a fixed client-facing message. The raw error can name namespaces,
+// hosts, or server internals, so it's only logged (see collectResults),
+// never returned.
 func errorResponse(err error) (response.Status, int, string) {
 	var notFound *serviceerror.NotFound
 	if errors.As(err, &notFound) {
-		return response.StatusNotFound, http.StatusNotFound, err.Error()
+		return response.StatusNotFound, http.StatusNotFound, "workflow not found"
 	}
 
 	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 	if errors.As(err, &alreadyStarted) {
-		return response.StatusDuplicated, http.StatusConflict, err.Error()
+		return response.StatusDuplicated, http.StatusConflict, "workflow already started"
 	}
 
 	var invalidArgument *serviceerror.InvalidArgument
 	if errors.As(err, &invalidArgument) {
-		return response.StatusInvalidArgument, http.StatusBadRequest, err.Error()
+		return response.StatusInvalidArgument, http.StatusBadRequest, "rejected by temporal: invalid argument"
 	}
 
 	var permissionDenied *serviceerror.PermissionDenied
 	if errors.As(err, &permissionDenied) {
-		return response.StatusForbidden, http.StatusForbidden, err.Error()
+		return response.StatusForbidden, http.StatusForbidden, "permission denied"
 	}
 
-	return response.StatusFailed, http.StatusBadGateway, err.Error()
+	var deadlineExceeded *serviceerror.DeadlineExceeded
+	if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &deadlineExceeded) {
+		return response.StatusTimeout, http.StatusGatewayTimeout, "timed out waiting for temporal"
+	}
+
+	return response.StatusFailed, http.StatusBadGateway, "temporal request failed"
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

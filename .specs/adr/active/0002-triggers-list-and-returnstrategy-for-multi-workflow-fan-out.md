@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`multi-trigger-dispatch.feature`](../features/multi-trigger-dispatch.feature)
+**Related features:** [`multi-trigger-dispatch.feature`](../../features/multi-trigger-dispatch.feature)
 
 ## Context
 

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`start-workflow-semantics.feature`](../features/start-workflow-semantics.feature)
+**Related features:** [`start-workflow-semantics.feature`](../../features/start-workflow-semantics.feature)
 
 ## Context
 

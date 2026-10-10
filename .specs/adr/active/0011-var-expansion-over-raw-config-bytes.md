@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`environment-config.feature`](../features/environment-config.feature)
+**Related features:** [`environment-config.feature`](../../features/environment-config.feature)
 
 ## Context
 

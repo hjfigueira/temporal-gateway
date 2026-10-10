@@ -1,6 +1,6 @@
-# See .specs/adr/0011-var-expansion-over-raw-config-bytes.md
-# See .specs/adr/0012-multi-file-api-spec-merge.md
-# See .specs/adr/0008-fail-fast-validation-at-startup.md
+# See .specs/adr/active/0011-var-expansion-over-raw-config-bytes.md
+# See .specs/adr/active/0012-multi-file-api-spec-merge.md
+# See .specs/adr/active/0008-fail-fast-validation-at-startup.md
 # Code: internal/envsubst/envsubst.go, internal/dotenv/dotenv.go,
 #       internal/config/spec_path.go, internal/spec/spec.go (merge), main.go
 
@@ -34,7 +34,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     Given "${GATEWAY_PORT:-8081}" appears as a bare (unquoted) YAML scalar
     When the file is loaded
     Then the substitution happens first, then the result is parsed as YAML
-    So the substituted text must itself be valid YAML for that field's type
+    # So the substituted text must itself be valid YAML for that field's type
 
   Scenario: .env supplies defaults only for variables not already set
     Given a .env file sets ORDERS_TASK_QUEUE=from-dotenv
@@ -72,7 +72,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     And apiSpec: "./api-spec.yaml"
     When paths are resolved
     Then the resolved path is /etc/gateway/api-spec.yaml
-    Regardless of the process's current working directory
+    # Regardless of the process's current working directory
 
   Scenario: --dry-run validates everything and exits without serving
     Given a config.yml and api-spec.yaml that are both fully valid
@@ -80,6 +80,13 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     When the gateway runs with --dry-run
     Then it loads config, loads the spec, dials Temporal, validates namespaces
     And exits 0 without binding the HTTP server
+
+  Scenario: --dry-run does not wait for an unreachable Temporal
+    Given temporal.reconnect.maxAttempts is 0 (retry forever)
+    And the Temporal server is not reachable
+    When the gateway runs with --dry-run
+    Then it makes a single dial attempt per namespace
+    And exits 1 without retrying
 
   Scenario: --dry-run exits non-zero on the first failure
     Given api-spec.yaml references a namespace not in temporal.connections

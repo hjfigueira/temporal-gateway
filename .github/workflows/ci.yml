@@ -1,0 +1,39 @@
+# Runs on every push and pull request to main: formatting, vet, and the
+# race-enabled test suite. Image publishing is separate (docker-release.yml).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: test -z "$(gofmt -s -l . | tee /dev/stderr)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      # Fails on known vulnerabilities reachable from our code, in
+      # dependencies or the Go toolchain itself (pinned via go.mod's
+      # toolchain line).
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...

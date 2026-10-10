@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`multi-namespace-temporal.feature`](../features/multi-namespace-temporal.feature)
+**Related features:** [`multi-namespace-temporal.feature`](../../features/multi-namespace-temporal.feature)
 
 ## Context
 

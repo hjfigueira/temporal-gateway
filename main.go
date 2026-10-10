@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"temporal-gateway/internal/config"
 	"temporal-gateway/internal/dotenv"
 	"temporal-gateway/internal/gateway"
+	"temporal-gateway/internal/health"
 	"temporal-gateway/internal/spec"
 	"temporal-gateway/internal/telemetry"
 	"temporal-gateway/internal/temporal"
@@ -24,16 +26,28 @@ import (
 
 // shutdownTimeout bounds how long the server waits for in-flight requests to
 // finish once a shutdown signal is received, and how long telemetry export
-// gets to flush on the same shutdown.
-const shutdownTimeout = 10 * time.Second
+// gets to flush on the same shutdown. A var so tests can shorten it.
+var shutdownTimeout = 10 * time.Second
+
+// exit and setupTelemetry are swapped out by tests.
+var (
+	exit           = os.Exit
+	setupTelemetry = telemetry.Setup
+)
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	if err := run(logger); err != nil {
+	// Cancelled on SIGINT/SIGTERM: interrupts a startup that's still
+	// waiting for Temporal to come up, and triggers the HTTP server's
+	// graceful shutdown once it's serving.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, os.Args[1:], logger); err != nil {
 		logger.Error("fatal", "error", err)
-		os.Exit(1)
+		exit(1)
 	}
 }
 
@@ -42,8 +56,14 @@ func main() {
 // deferred cleanup (closing Temporal connections, flushing telemetry) always
 // runs - os.Exit skips defers, which is why it's called exactly once, in
 // main, after run has already returned and unwound.
-func run(logger *slog.Logger) error {
-	flags := parseFlags()
+func run(ctx context.Context, args []string, logger *slog.Logger) error {
+	flags, err := parseFlags(args)
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 
 	if err := dotenv.Load(flags.envPath); err != nil {
 		return fmt.Errorf("load env file %q: %w", flags.envPath, err)
@@ -57,7 +77,7 @@ func run(logger *slog.Logger) error {
 	// Configure tracing before dialing Temporal or building the HTTP
 	// handler, so both pick up the real TracerProvider from the start
 	// rather than the no-op one otel installs by default.
-	shutdownTelemetry, err := telemetry.Setup(context.Background(), cfg.OTel)
+	shutdownTelemetry, err := setupTelemetry(context.Background(), cfg.OTel)
 	if err != nil {
 		return fmt.Errorf("set up telemetry: %w", err)
 	}
@@ -78,17 +98,32 @@ func run(logger *slog.Logger) error {
 
 	logStartup(logger, flags.configPath, specPaths, cfg, apiSpec)
 
-	connections, err := temporal.NewConnections(cfg.Temporal)
-	if err != nil {
-		// NewConnections returns whatever it managed to dial before the
-		// failure (never nil), so this closes those rather than leaking
-		// them.
-		if connections != nil {
-			connections.Close()
+	// The probe server starts before Temporal is dialed, so liveness passes
+	// (and readiness reports why it doesn't) while the gateway is still
+	// waiting for Temporal to come up.
+	probes := health.NewProbes("waiting for temporal")
+	if cfg.Health.Enabled && !flags.dryRun {
+		healthServer, err := startHealthServer(fmt.Sprintf("%s:%d", cfg.Health.Host, cfg.Health.Port), probes.Handler(), logger)
+		if err != nil {
+			return fmt.Errorf("start health server: %w", err)
 		}
+		// Close only fails if closing the listener does; nothing to do then.
+		defer func() { _ = healthServer.Close() }()
+	}
+
+	temporalCfg := cfg.Temporal
+	if flags.dryRun {
+		// A dry run is a pass/fail check (CI, pre-deploy), so it reports an
+		// unreachable Temporal immediately instead of waiting for it.
+		temporalCfg.Reconnect.MaxAttempts = 1
+	}
+	connections, err := temporal.NewConnections(ctx, temporalCfg, logger)
+	// Deferred before the error check on purpose: on failure NewConnections
+	// still returns whatever it did dial, and those must be closed too.
+	defer connections.Close()
+	if err != nil {
 		return fmt.Errorf("connect to temporal: %w", err)
 	}
-	defer connections.Close()
 
 	if err := temporal.ValidateNamespaces(apiSpec, connections); err != nil {
 		return fmt.Errorf("api spec references unknown temporal namespace: %w", err)
@@ -99,16 +134,19 @@ func run(logger *slog.Logger) error {
 		return nil
 	}
 
+	probes.Ready(connections.CheckHealth)
+
 	dispatcher := temporal.NewDispatcher(connections)
-	handler := gateway.NewHandler(apiSpec, dispatcher, logger)
-	server := newServer(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), handler)
-	defer func(server *http.Server) {
-		err := server.Close()
-		if err != nil {
-			logger.Error("failed to close server", "err", err)
-		}
-	}(server)
-	return serve(server, logger)
+	requestTimeout := cfg.Server.RequestTimeoutDuration()
+	handler := gateway.NewHandler(apiSpec, dispatcher, gateway.Options{
+		MaxBodyBytes:   cfg.Server.MaxBodyBytesOrDefault(),
+		RequestTimeout: requestTimeout,
+	}, logger)
+	server := newServer(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port), handler, requestTimeout)
+	// serve has already shut server down gracefully; this only releases
+	// what's left, and has nothing actionable to report.
+	defer func() { _ = server.Close() }()
+	return serve(ctx, server, probes, logger)
 }
 
 // cliFlags holds the process's parsed command-line flags.
@@ -118,13 +156,17 @@ type cliFlags struct {
 	dryRun     bool
 }
 
-// parseFlags reads the process's command-line flags.
-func parseFlags() cliFlags {
-	configPath := flag.String("config", "config.yml", "path to the gateway config file")
-	envPath := flag.String("env", ".env", "path to a .env file with environment variables (missing file is not an error)")
-	dryRun := flag.Bool("dry-run", false, "load and validate config, api spec, and temporal connections, then exit without starting the server")
-	flag.Parse()
-	return cliFlags{configPath: *configPath, envPath: *envPath, dryRun: *dryRun}
+// parseFlags parses args (the command line minus the program name).
+// -h/-help returns flag.ErrHelp after printing usage.
+func parseFlags(args []string) (cliFlags, error) {
+	fs := flag.NewFlagSet("temporal-gateway", flag.ContinueOnError)
+	configPath := fs.String("config", "config.yml", "path to the gateway config file")
+	envPath := fs.String("env", ".env", "path to a .env file with environment variables (missing file is not an error)")
+	dryRun := fs.Bool("dry-run", false, "load and validate config, api spec, and temporal connections (a single dial attempt, no reconnect), then exit without starting the server")
+	if err := fs.Parse(args); err != nil {
+		return cliFlags{}, err
+	}
+	return cliFlags{configPath: *configPath, envPath: *envPath, dryRun: *dryRun}, nil
 }
 
 // logStartup records what was loaded: the resolved config, the API spec, and
@@ -146,6 +188,7 @@ func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg 
 		"config_path", configPath,
 		slog.Group("server", "host", cfg.Server.Host, "port", cfg.Server.Port),
 		"temporal_namespaces", namespaces,
+		slog.Group("temporal_reconnect", "interval", cfg.Temporal.Reconnect.IntervalDuration().String(), "max_attempts", cfg.Temporal.Reconnect.MaxAttempts),
 		"auth_type", cfg.Auth.Type,
 		"middlewares", middlewares,
 	)
@@ -188,8 +231,11 @@ func logStartup(logger *slog.Logger, configPath string, specPaths []string, cfg 
 }
 
 // newServer builds the HTTP server fronting handler, with timeouts bounding
-// how long a client may hold a connection open at each stage.
-func newServer(addr string, handler http.Handler) *http.Server {
+// how long a client may hold a connection open at each stage. The write
+// timeout trails requestTimeout, so a slow dispatch is cut off by the
+// handler's own deadline (and answered with 504) before the server drops
+// the response.
+func newServer(addr string, handler http.Handler, requestTimeout time.Duration) *http.Server {
 	return &http.Server{
 		Addr:    addr,
 		Handler: handler,
@@ -199,21 +245,41 @@ func newServer(addr string, handler http.Handler) *http.Server {
 		// with the net/http default of no timeout).
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      requestTimeout + 5*time.Second,
 		// IdleTimeout closes keep-alive connections that go quiet instead
 		// of holding their read/write buffers open indefinitely.
 		IdleTimeout: 60 * time.Second,
 	}
 }
 
-// serve runs server until a SIGINT/SIGTERM triggers a graceful shutdown, so
-// in-flight requests are drained instead of dropped, within shutdownTimeout.
-func serve(server *http.Server, logger *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// startHealthServer binds addr synchronously - so a port conflict fails
+// startup instead of being logged from a goroutine - then serves handler on
+// it in the background until the returned server is closed.
+func startHealthServer(addr string, handler http.Handler, logger *slog.Logger) (*http.Server, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	server := &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	// Serve on an open listener only returns once the server is closed.
+	go func() { _ = server.Serve(listener) }()
+	logger.Info("starting health server", "addr", listener.Addr().String())
+	return server, nil
+}
 
+// serve runs server until ctx is cancelled (SIGINT/SIGTERM), then marks the
+// gateway not ready and shuts server down gracefully, so in-flight requests
+// are drained instead of dropped, within shutdownTimeout.
+func serve(ctx context.Context, server *http.Server, probes *health.Probes, logger *slog.Logger) error {
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
+		probes.NotReady("shutting down")
 		logger.Info("shutting down", "timeout", shutdownTimeout.String())
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
@@ -226,5 +292,8 @@ func serve(server *http.Server, logger *slog.Logger) error {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("http server stopped: %w", err)
 	}
+	// ListenAndServe returns as soon as Shutdown starts; wait for the drain
+	// to finish, or run's deferred cleanup would cut in-flight requests off.
+	<-shutdownDone
 	return nil
 }

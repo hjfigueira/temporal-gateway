@@ -61,7 +61,7 @@ func TestWorkflowStartedEmbedsEnvelopeFlat(t *testing.T) {
 func TestStatusIsError(t *testing.T) {
 	errorStatuses := []Status{
 		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
-		StatusInvalidRequest, StatusValidationFailed, StatusFailed,
+		StatusInvalidRequest, StatusValidationFailed, StatusPayloadTooLarge, StatusTimeout, StatusFailed,
 	}
 	for _, s := range errorStatuses {
 		if !s.IsError() {
@@ -74,5 +74,12 @@ func TestStatusIsError(t *testing.T) {
 		if s.IsError() {
 			t.Errorf("%s.IsError() = true, want false", s)
 		}
+	}
+}
+
+func TestGetStatusIsPromotedFromEnvelope(t *testing.T) {
+	r := WorkflowStarted{Envelope: Envelope{Status: StatusStarted}}
+	if got := r.GetStatus(); got != StatusStarted {
+		t.Fatalf("GetStatus() = %q, want %q", got, StatusStarted)
 	}
 }

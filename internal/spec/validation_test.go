@@ -281,3 +281,32 @@ func TestValidateRejectsMissingTriggers(t *testing.T) {
 		t.Errorf("error %q does not mention triggers", err.Error())
 	}
 }
+
+func TestValidateWorkflowIDPlaceholders(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		workflowID string
+		wantErr    string
+	}{
+		{name: "every origin and uuidv7", path: "/orders/{orderId}", workflowID: "o-{path.orderId}-{body.a}-{query.b}-{HEADER.X-C}-{UUIDv7}"},
+		{name: "unknown path param", path: "/orders/{orderId}", workflowID: "o-{path.id}", wantErr: "names no path parameter"},
+		{name: "typo'd origin", path: "/orders", workflowID: "o-{paht.id}", wantErr: `unknown origin "paht"`},
+		{name: "missing origin", path: "/orders", workflowID: "o-{orderId}", wantErr: "must be {uuidv7} or {origin.field}"},
+		{name: "empty field", path: "/orders", workflowID: "o-{body.}", wantErr: "must be {uuidv7} or {origin.field}"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateWorkflowIDTemplate("POST", tt.path, 0, tt.workflowID)
+			if tt.wantErr == "" {
+				if len(errs) != 0 {
+					t.Fatalf("want no errors, got %v", errs)
+				}
+				return
+			}
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), tt.wantErr) {
+				t.Fatalf("errs = %v, want one containing %q", errs, tt.wantErr)
+			}
+		})
+	}
+}

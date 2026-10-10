@@ -19,11 +19,7 @@ type APISpecPaths []string
 // APISpecPaths.
 func (p *APISpecPaths) UnmarshalYAML(value *yaml.Node) error {
 	if value.Kind == yaml.ScalarNode {
-		var single string
-		if err := value.Decode(&single); err != nil {
-			return err
-		}
-		*p = APISpecPaths{single}
+		*p = APISpecPaths{value.Value}
 		return nil
 	}
 

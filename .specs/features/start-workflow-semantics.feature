@@ -1,7 +1,9 @@
-# See .specs/adr/0005-accurate-start-semantics.md
-# See .specs/adr/0006-terminateifrunning-reuse-policy-mapping.md
-# See .specs/adr/0007-typed-search-attributes.md
-# Code: internal/temporal/start_workflow.go, internal/temporal/policy.go,
+# See .specs/adr/deprecated/0005-accurate-start-semantics.md
+# See .specs/adr/active/0021-started-flag-from-server-not-describe-first.md
+# See .specs/adr/active/0006-terminateifrunning-reuse-policy-mapping.md
+# See .specs/adr/active/0007-typed-search-attributes.md
+# Code: internal/temporal/start_workflow.go, internal/temporal/started.go,
+#       internal/temporal/policy.go,
 #       internal/temporal/search_attributes.go, internal/spec/validation.go
 
 Feature: startWorkflow semantics and options
@@ -22,8 +24,7 @@ Feature: startWorkflow semantics and options
 
   Scenario: Attaching to an already-running execution reports its real state
     Given a workflow with this workflowId is already RUNNING
-    And the configured idReusePolicy/workflowIdConflictPolicy allows attaching
-      instead of erroring
+    And the configured idReusePolicy/workflowIdConflictPolicy allows attaching instead of erroring
     When startWorkflow dispatches
     Then ExecuteWorkflow returns successfully with the existing RunID
     And the response status is "WORKFLOW_RUNNING", not "STARTED"
@@ -32,8 +33,9 @@ Feature: startWorkflow semantics and options
   Scenario Outline: Attaching to a completed-state execution reports that state
     Given a workflow with this workflowId previously ended in state "<prior_state>"
     And the configured policy allows attaching instead of erroring
-    When startWorkflow dispatches and returns the same prior RunID
-    Then the response status is "<status>"
+    When startWorkflow dispatches and the server reports it did not start a run
+    Then the attached run is described by its RunID
+    And the response status is "<status>"
 
     Examples:
       | prior_state | status               |
@@ -43,20 +45,26 @@ Feature: startWorkflow semantics and options
       | TERMINATED  | WORKFLOW_TERMINATED  |
       | TIMED_OUT   | WORKFLOW_TIMED_OUT   |
 
-  Scenario: RunID comparison, not timing, distinguishes started from attached
-    Given a DescribeWorkflowExecution call before dispatch captures a prior RunID
-    When ExecuteWorkflow returns a RunID equal to that prior RunID
-    Then the trigger is classified as "attached to existing run"
-    But when ExecuteWorkflow returns a different RunID
+  Scenario: The server's Started flag, not a prior describe, decides started vs attached
+    When ExecuteWorkflow's StartWorkflowExecution response has Started = true
     Then the trigger is classified as "started a new run"
-    # Never inferred from timestamps - ordinary request latency can exceed
-    # the gap between two calls.
+    But when Started is false, or the start call failed with AlreadyStarted and the SDK returned the existing run instead of an error
+    Then the trigger is classified as "attached to existing run"
+    # No DescribeWorkflowExecution happens before the start, so a fresh
+    # start costs one RPC.
 
-  Scenario: No prior execution means DescribeWorkflowExecution errors with NotFound
-    Given no execution exists yet for workflowId
-    When the pre-dispatch DescribeWorkflowExecution call is made
-    Then it returns NotFound
-    And this is treated as "nothing to attach to", not a dispatch failure
+  Scenario: Concurrent identical starts report STARTED exactly once
+    Given workflowIdConflictPolicy is "UseExisting"
+    And no execution exists yet for workflowId
+    When 10 identical startWorkflow requests arrive concurrently
+    Then exactly one response has status "STARTED"
+    And the other nine report "WORKFLOW_RUNNING" with the same RunID
+
+  Scenario: A failed describe of the attached run falls back to WORKFLOW_RUNNING
+    Given startWorkflow attached to an existing run
+    And describing that run fails
+    Then the response status is "WORKFLOW_RUNNING"
+    And it is never reported as "STARTED"
 
   Scenario: idReusePolicy "TerminateIfRunning" maps to AllowDuplicate + TerminateExisting
     Given a trigger sets idReusePolicy: TerminateIfRunning

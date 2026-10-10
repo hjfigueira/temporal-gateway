@@ -3,28 +3,30 @@ package gateway
 import (
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
-)
 
-// templatePlaceholder matches a "{name}" placeholder in a workflowId
-// template.
-var templatePlaceholder = regexp.MustCompile(`\{([^{}]+)}`)
+	"temporal-gateway/internal/spec"
+)
 
 // renderTemplate substitutes "{name}" placeholders in tmpl using resolve,
 // e.g. renderTemplate("order-{path.orderId}", resolve) -> "order-o1" when
-// resolve("path.orderId") returns ("o1", true). A placeholder resolve can't
-// satisfy is left untouched.
-func renderTemplate(tmpl string, resolve func(name string) (string, bool)) string {
-	return templatePlaceholder.ReplaceAllStringFunc(tmpl, func(match string) string {
+// resolve("path.orderId") returns ("o1", true). It also returns every
+// placeholder resolve couldn't satisfy, so the caller can reject the
+// request instead of dispatching a literal "{...}" workflow ID that every
+// such request would share (see ADR-020).
+func renderTemplate(tmpl string, resolve func(name string) (string, bool)) (string, []string) {
+	var unresolved []string
+	rendered := spec.TemplatePlaceholder.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := match[1 : len(match)-1]
 		if value, ok := resolve(name); ok {
 			return value
 		}
+		unresolved = append(unresolved, match)
 		return match
 	})
+	return rendered, unresolved
 }
 
 // fieldResolver returns a lookup used to fill "{name}" placeholders in a
@@ -38,11 +40,9 @@ func fieldResolver(r *http.Request, pathParams map[string]string, body any) func
 
 	return func(name string) (string, bool) {
 		if strings.EqualFold(name, "uuidv7") {
-			id, err := uuid.NewV7()
-			if err != nil {
-				return "", false
-			}
-			return id.String(), true
+			// NewV7 only fails if crypto/rand does, which crashes the
+			// process anyway since Go 1.24.
+			return uuid.Must(uuid.NewV7()).String(), true
 		}
 
 		origin, field, ok := strings.Cut(name, ".")

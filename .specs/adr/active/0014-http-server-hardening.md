@@ -1,8 +1,10 @@
 # ADR-014: HTTP server hardening — explicit timeouts, graceful shutdown
 
+**Extended by [ADR-022](0022-per-request-limits-and-sanitized-errors.md)** — `WriteTimeout` is now derived from `server.requestTimeout` (+5s).
+
 **Status:** Accepted
 
-**Related features:** [`response-and-server-hardening.feature`](../features/response-and-server-hardening.feature)
+**Related features:** [`response-and-server-hardening.feature`](../../features/response-and-server-hardening.feature)
 
 ## Context
 

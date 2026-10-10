@@ -1,8 +1,10 @@
 # ADR-004: `{origin.field}` placeholders for workflow ID templating
 
+**Superseded in part by [ADR-020](0020-unresolved-workflow-id-placeholders-are-rejected.md)** — unresolved placeholders are now rejected (422), not left literal.
+
 **Status:** Accepted
 
-**Related features:** [`workflow-id-templating.feature`](../features/workflow-id-templating.feature)
+**Related features:** [`workflow-id-templating.feature`](../../features/workflow-id-templating.feature)
 
 ## Context
 

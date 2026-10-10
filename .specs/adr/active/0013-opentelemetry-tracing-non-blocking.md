@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`observability-tracing.feature`](../features/observability-tracing.feature)
+**Related features:** [`observability-tracing.feature`](../../features/observability-tracing.feature)
 
 ## Context
 

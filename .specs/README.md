@@ -3,12 +3,13 @@
 This directory is the project's source of truth for *why* temporal-gateway
 is built the way it is, and *what* each feature is supposed to do.
 
-- **[`adr/`](adr/)** — every significant architecture decision, one file per
-  decision (`adr/0001-...md`, `adr/0002-...md`, ...), indexed in
+- **[`adr/`](adr)** — every significant architecture decision, one file per
+  decision, split into `adr/active/` (in force) and `adr/deprecated/`
+  (wholly superseded, kept for history), indexed in
   [`adr/README.md`](adr/README.md). Context, decision, consequences. Add a
   new numbered file per decision; mark a superseded one rather than
   deleting it.
-- **[`features/`](features/)** — one Gherkin `.feature` file per feature
+- **[`features/`](features)** — one Gherkin `.feature` file per feature
   area, describing expected behavior as concrete scenarios. Each file
   starts with a comment pointing back at the relevant `adr/*.md` files and
   the primary Go source files that implement it.
@@ -17,15 +18,16 @@ is built the way it is, and *what* each feature is supposed to do.
 |---|---|
 | `spec-driven-routing.feature` | Routes generated from `api-spec.yaml`, no handler code |
 | `multi-trigger-dispatch.feature` | `x-temporal.triggers` list, `returnStrategy`, concurrent dispatch, 207/409 |
-| `multi-namespace-temporal.feature` | `temporal.connections`, per-trigger namespace, startup validation |
+| `multi-namespace-temporal.feature` | `temporal.connections`, per-trigger namespace, startup validation, `temporal.reconnect` |
 | `workflow-id-templating.feature` | `{origin.field}` / `{uuidv7}` placeholders |
 | `request-validation.feature` | JSON Schema-lite body validation, field-level errors |
 | `start-workflow-semantics.feature` | `startWorkflow` options, started-vs-attached, ID reuse/conflict, search attributes |
 | `other-temporal-actions.feature` | `signalWorkflow`, `queryWorkflow`, `cancelWorkflow`, `terminateWorkflow`, `getResult` |
 | `observability-tracing.feature` | OpenTelemetry spans and trace propagation into Temporal |
 | `environment-config.feature` | `${VAR}` expansion, `.env`, multi-file spec merging, `--dry-run` |
-| `response-and-server-hardening.feature` | Response envelope/status model, HTTP timeouts, graceful shutdown |
-| `deployment-cicd.feature` | Docker image, GHCR release publishing |
+| `response-and-server-hardening.feature` | Response envelope/status model, HTTP timeouts, body limit, request deadline, graceful shutdown |
+| `health-probes.feature` | `/livez` and `/readyz` on a separate health port, readiness tied to Temporal |
+| `deployment-cicd.feature` | Docker image, GHCR release publishing, CI checks |
 
 ## How to use this when adding or changing a feature
 
@@ -39,7 +41,7 @@ is built the way it is, and *what* each feature is supposed to do.
    scenarios (add, remove, or edit them) in the same change as the code.
 3. **Record new or changed decisions.** A new architectural choice, or one
    that changes an existing decision's reasoning, gets a new
-   `adr/000N-slug.md` file (see [`adr/README.md`](adr/README.md) for the
+   `adr/active/000N-slug.md` file (see [`adr/README.md`](adr/README.md) for the
    template and the next number) plus a row in that file's index table. If
    it supersedes an earlier decision, add `**Superseded by
    [ADR-000N](000N-slug.md)**` to the top of that earlier file rather than

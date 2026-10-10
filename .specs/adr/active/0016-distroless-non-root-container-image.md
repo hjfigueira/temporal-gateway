@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 
-**Related features:** [`deployment-cicd.feature`](../features/deployment-cicd.feature)
+**Related features:** [`deployment-cicd.feature`](../../features/deployment-cicd.feature)
 
 ## Context
 

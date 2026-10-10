@@ -1,8 +1,11 @@
 package temporal
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"go.temporal.io/sdk/client"
 
@@ -27,19 +30,35 @@ type Connection struct {
 // across the concurrent dispatches in internal/gateway.
 type Connections map[string]*Connection
 
-// NewConnections dials one client per entry in cfg.Connections. On error,
-// it still returns whatever connections it managed to dial before the
-// failure so the caller can Close them.
-func NewConnections(cfg config.TemporalConfig) (Connections, error) {
+// newClient is NewClient, swappable in tests.
+var newClient = NewClient
+
+// NewConnections dials one client per entry in cfg.Connections,
+// concurrently, retrying each unreachable namespace per cfg.Reconnect (see
+// NewClient) - so startup waits for the slowest namespace, not the sum of
+// all of them. Every failure is reported (joined), and whatever connections
+// did succeed are still returned so the caller can Close them.
+func NewConnections(ctx context.Context, cfg config.TemporalConfig, logger *slog.Logger) (Connections, error) {
 	conns := make(Connections, len(cfg.Connections))
-	for _, c := range cfg.Connections {
-		cl, err := NewClient(c)
-		if err != nil {
-			return conns, fmt.Errorf("temporal: namespace %q: %w", c.Namespace, err)
-		}
-		conns[c.Namespace] = &Connection{Client: cl, Catalog: NewCatalog(c.Workflows)}
+	errs := make([]error, len(cfg.Connections))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for i, c := range cfg.Connections {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cl, err := newClient(ctx, c, cfg.Reconnect, logger)
+			if err != nil {
+				errs[i] = fmt.Errorf("temporal: namespace %q: %w", c.Namespace, err)
+				return
+			}
+			mu.Lock()
+			conns[c.Namespace] = &Connection{Client: cl, Catalog: NewCatalog(c.Workflows)}
+			mu.Unlock()
+		}()
 	}
-	return conns, nil
+	wg.Wait()
+	return conns, errors.Join(errs...)
 }
 
 // resolve looks up the connection for namespace, returning an error naming
@@ -59,6 +78,27 @@ func (c Connections) Close() {
 	for _, conn := range c {
 		conn.Client.Close()
 	}
+}
+
+// CheckHealth asks every namespace's Temporal frontend whether it's serving,
+// concurrently, returning each namespace's result (nil = healthy). Used by
+// the readiness probe (see internal/health).
+func (c Connections) CheckHealth(ctx context.Context) map[string]error {
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		results = make(map[string]error, len(c))
+	)
+	for namespace, conn := range c {
+		wg.Go(func() {
+			_, err := conn.Client.CheckHealth(ctx, &client.CheckHealthRequest{})
+			mu.Lock()
+			results[namespace] = err
+			mu.Unlock()
+		})
+	}
+	wg.Wait()
+	return results
 }
 
 // ValidateNamespaces checks that every x-temporal binding in apiSpec names
