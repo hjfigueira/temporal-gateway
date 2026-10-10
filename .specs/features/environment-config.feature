@@ -1,7 +1,8 @@
 # See .specs/adr/active/0011-var-expansion-over-raw-config-bytes.md
 # See .specs/adr/active/0012-multi-file-api-spec-merge.md
 # See .specs/adr/active/0008-fail-fast-validation-at-startup.md
-# Code: internal/envsubst/envsubst.go, internal/dotenv/dotenv.go,
+# See .specs/adr/active/0027-godotenv-for-dotenv-loading.md
+# Code: internal/config/envsubst/envsubst.go, main.go (godotenv.Load),
 #       internal/config/spec_path.go, internal/spec/spec.go (merge), main.go
 
 Feature: Environment-aware config, .env loading, and multi-file specs
@@ -39,7 +40,7 @@ Feature: Environment-aware config, .env loading, and multi-file specs
   Scenario: .env supplies defaults only for variables not already set
     Given a .env file sets ORDERS_TASK_QUEUE=from-dotenv
     And the real process environment already has ORDERS_TASK_QUEUE=from-env
-    When dotenv.Load runs before config parsing
+    When the .env file is loaded before config parsing
     Then the real environment's value "from-env" wins
     # Real environment variables always take precedence over the .env file.
 
@@ -48,6 +49,34 @@ Feature: Environment-aware config, .env loading, and multi-file specs
     When the gateway starts
     Then startup proceeds normally
     And no error is raised for the missing file
+
+  Scenario: .env follows the standard dotenv format
+    Given a .env file containing:
+      """
+      export TEMPORAL_HOST=temporal:7233   # inline comment
+      GREETING="line one\nline two"
+      """
+    When the .env file is loaded
+    Then TEMPORAL_HOST is "temporal:7233"
+    And GREETING spans two lines
+
+  Scenario Outline: A "$" in a .env value needs single quotes or an escape
+    Given a .env file line <line>
+    And no variable named SWORD1 is set
+    When the .env file is loaded
+    Then PASSWORD is "<value>"
+
+    Examples:
+      | line                   | value     |
+      | PASSWORD=Pa$SWORD1     | Pa        |
+      | PASSWORD='Pa$SWORD1'   | Pa$SWORD1 |
+      | PASSWORD=Pa\$SWORD1    | Pa$SWORD1 |
+    # Unquoted/double-quoted $UPPERCASE expands, and to "" when undefined.
+
+  Scenario: A malformed .env line fails startup
+    Given a .env file with a line that has no "="
+    When the gateway starts
+    Then startup fails naming the .env file
 
   Scenario: apiSpec accepts a single path or a list of paths
     Given config.yml's apiSpec is either a bare string or a YAML list of strings

@@ -7,18 +7,20 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"temporal-gateway/internal/gateway/health"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"temporal-gateway/internal/config"
-	"temporal-gateway/internal/dotenv"
 	"temporal-gateway/internal/gateway"
-	"temporal-gateway/internal/health"
 	"temporal-gateway/internal/spec"
 	"temporal-gateway/internal/telemetry"
 	"temporal-gateway/internal/temporal"
@@ -65,7 +67,9 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 		return err
 	}
 
-	if err := dotenv.Load(flags.envPath); err != nil {
+	// A missing .env is normal: most deployments set real environment
+	// variables instead. Variables already set always win over the file.
+	if err := godotenv.Load(flags.envPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("load env file %q: %w", flags.envPath, err)
 	}
 

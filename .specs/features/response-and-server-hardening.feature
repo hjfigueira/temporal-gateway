@@ -89,7 +89,7 @@ Feature: Response envelope and HTTP server hardening
     And the shutdown proceeds (does not wait indefinitely)
 
   Scenario: Every fallible startup stage returns an error instead of exiting directly
-    Given any of: dotenv.Load, config.Load, telemetry.Setup, spec.Load, temporal.NewConnections, temporal.ValidateNamespaces fails
+    Given any of: loading .env, config.Load, telemetry.Setup, spec.Load, temporal.ValidateNamespaces, or temporal Connections.Connect (giving up) fails
     When run() executes
     Then it returns an error immediately, propagated up to main()
     And deferred cleanup (closing Temporal connections, flushing telemetry) still runs before the process exits

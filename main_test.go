@@ -333,3 +333,20 @@ func TestRunServesBeforeTemporalConnects(t *testing.T) {
 		t.Fatal("run did not return after cancellation")
 	}
 }
+
+// TestRunLoadsDotEnvBeforeConfig: a .env value (here with an inline comment,
+// which godotenv strips) feeds ${VAR} expansion in config.yml.
+func TestRunLoadsDotEnvBeforeConfig(t *testing.T) {
+	addr := startFakeFrontend(t)
+	cfg := gatewayFiles{temporalHost: "${TG_TEST_TEMPORAL_HOST}"}.write(t)
+	envFile := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(envFile, []byte("TG_TEST_TEMPORAL_HOST="+addr+" # fake frontend\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv("TG_TEST_TEMPORAL_HOST") })
+
+	logger, _ := newLogger()
+	if err := run(context.Background(), []string{"-config", cfg, "-env", envFile, "-dry-run"}, logger); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+}

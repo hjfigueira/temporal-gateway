@@ -25,7 +25,7 @@ what it should.
 
 - A **separate probe server** (`health.host`/`health.port`, default
   `8082`, `health.enabled` default `true`) serves `GET /livez` and
-  `GET /readyz` (`internal/health`). It binds **before** Temporal is
+  `GET /readyz` (`../../../internal/gateway/health`). It binds **before** Temporal is
   dialed, synchronously, so a port conflict fails startup. Its own port
   also means probe paths can never collide with a route in
   `api-spec.yaml`, and probe traffic stays out of request tracing.

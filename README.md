@@ -91,7 +91,7 @@ A pre-built image is published to GHCR on every GitHub Release (see
 | Flag         | Default      | Description                                                          |
 |--------------|--------------|------------------------------------------------------------------------|
 | `--config`   | `config.yml` | Path to the gateway config file                                      |
-| `--env`      | `.env`       | Path to a `.env` file to load into the process environment before config parsing (a missing file is not an error) |
+| `--env`      | `.env`       | Path to a `.env` file (standard dotenv format, via [godotenv](https://github.com/joho/godotenv)) to load into the process environment before config parsing. A missing file is not an error, and variables already set in the environment win. Write values containing `$` in single quotes, e.g. `PASSWORD='Pa$SWORD1'`, or the `$NAME` part is expanded |
 | `--dry-run`  | `false`      | Load and validate the config, API spec, and Temporal connections/namespaces (one dial attempt, no `temporal.reconnect` retries), then exit (0 on success, 1 on the first failure) without starting the HTTP server |
 
 ## Configuration (`config.yml`)
@@ -361,15 +361,15 @@ go test -race ./...
 ```
 main.go              entrypoint: loads config/spec, wires everything, serves HTTP
 internal/config      config.yml parsing
+  envsubst/          ${VAR}/${VAR:-default} expansion (config.yml + api-spec.yaml)
 internal/spec        api-spec.yaml parsing + validation
 internal/gateway     HTTP handler generation, request validation, dispatch
+  health/            /livez + /readyz probe server (own port, ADR-019)
 internal/templating  workflowId placeholders: parsing, rendering, fingerprint
 internal/temporal    Temporal client(s), namespace connection pool, dispatch
 internal/validate    JSON Schema-lite request body validation
-internal/response    response envelope + status types
+internal/response    response envelope + status types (shared by gateway, temporal, validate)
 internal/telemetry   OpenTelemetry setup
-internal/envsubst    ${VAR}/${VAR:-default} expansion
-internal/dotenv      .env file loading
 ```
 
 ## License

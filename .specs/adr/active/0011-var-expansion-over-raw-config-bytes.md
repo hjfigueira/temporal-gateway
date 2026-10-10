@@ -1,5 +1,7 @@
 # ADR-011: `${VAR}` / `${VAR:-default}` expansion over raw config bytes, before YAML parsing
 
+**Superseded in part by [ADR-027](0027-godotenv-for-dotenv-loading.md)**: `.env` files are now loaded with `joho/godotenv` (the precedence rule below stands; the hand-rolled `internal/dotenv` parser is gone).
+
 **Status:** Accepted
 
 **Related features:** [`environment-config.feature`](../../features/environment-config.feature)
@@ -12,11 +14,11 @@ files or requiring a templating step outside the gateway's own binary.
 
 ## Decision
 
-`internal/envsubst.Expand` runs a regex substitution
+`internal/config/envsubst.Expand` runs a regex substitution
 (`\$\{VAR(:-default)?\}`) over the **raw file bytes**, before YAML parsing,
 for both `config.yml` and every `api-spec.yaml` file. A reference without a
 default fails the load if the variable is unset — the gateway never
-silently resolves a missing variable to an empty string. `internal/dotenv`
+silently resolves a missing variable to an empty string. The `.env` loader
 optionally loads a `.env` file's `KEY=VALUE` pairs into the process
 environment first (missing file is not an error), but only for variables
 not already set in the real environment — real environment variables

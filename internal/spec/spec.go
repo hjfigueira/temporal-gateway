@@ -19,7 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"temporal-gateway/internal/envsubst"
+	"temporal-gateway/internal/config/envsubst"
 )
 
 // TemporalAction identifies which Temporal client call an operation

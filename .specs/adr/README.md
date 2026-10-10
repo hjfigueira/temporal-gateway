@@ -47,6 +47,7 @@ which.
 | [0024](active/0024-ci-checks-on-every-push-and-pr.md) | CI runs gofmt, vet, and race tests on every push and PR |
 | [0025](active/0025-fingerprint-placeholder-and-nested-body-paths.md) | `{fingerprint(...)}` placeholder and nested body paths |
 | [0026](active/0026-serve-http-before-temporal-connects.md) | Serve HTTP immediately; Temporal readiness via probes |
+| [0027](active/0027-godotenv-for-dotenv-loading.md) | Load `.env` with `joho/godotenv`, not a hand-rolled parser |
 
 ## Adding a new decision
 

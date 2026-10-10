@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"temporal-gateway/internal/envsubst"
+	"temporal-gateway/internal/config/envsubst"
 )
 
 // Defaults for ServerConfig's optional request limits.
@@ -124,7 +124,7 @@ type OTelConfig struct {
 }
 
 // HealthConfig configures the liveness (/livez) and readiness (/readyz)
-// probe server (see internal/health). It listens on its own Host:Port,
+// probe server (see internal/gateway/health). It listens on its own Host:Port,
 // separate from the API server, and starts before Temporal is dialed so
 // liveness passes while the gateway is still waiting for Temporal.
 type HealthConfig struct {

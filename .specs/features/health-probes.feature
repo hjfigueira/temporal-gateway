@@ -1,6 +1,6 @@
 # See .specs/adr/active/0019-liveness-and-readiness-probes-on-a-separate-port.md
 # See .specs/adr/active/0026-serve-http-before-temporal-connects.md
-# Code: internal/health/health.go, internal/temporal/connections.go
+# Code: internal/gateway/health/health.go, internal/temporal/connections.go
 #       (Connections.CheckHealth), internal/config/gateway.go (HealthConfig),
 #       main.go (startHealthServer, serve)
 

@@ -120,7 +120,7 @@ func (c Connections) Close() {
 
 // CheckHealth asks every namespace's Temporal frontend whether it's serving,
 // concurrently, returning each namespace's result (nil = healthy). Used by
-// the readiness probe (see internal/health).
+// the readiness probe (see internal/gateway/health).
 func (c Connections) CheckHealth(ctx context.Context) map[string]error {
 	var (
 		mu      sync.Mutex
