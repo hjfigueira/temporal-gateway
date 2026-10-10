@@ -350,7 +350,10 @@ gateway before it starts serving traffic.
   `WORKFLOW_STARTED` (`200`/`202`) if every trigger succeeded; otherwise, under
   `acceptPartial`, `WORKFLOW_NOT_STARTED` (a single failure status) if none did, or
   `WORKFLOW_PARTIALLY_STARTED` (**207 Multi-Status**) for a genuine mix; under
-  `allOrNothing`, `WORKFLOW_NOT_STARTED` (**409 Conflict**) for either case.
+  `allOrNothing`, `WORKFLOW_NOT_STARTED` (**409 Conflict**) for either case. When
+  not every trigger is a `startWorkflow` (a signal fan-out, say), the same three
+  outcomes are named `BATCH_SUCCEEDED` / `BATCH_FAILED` /
+  `BATCH_PARTIALLY_SUCCEEDED` instead.
 
 ## CI/CD
 
@@ -376,7 +379,8 @@ go test -race ./...
 ### Project layout
 
 ```
-main.go              entrypoint: loads config/spec, wires everything, serves HTTP
+main.go              entrypoint: only main(); lists the internal/app modules in order
+internal/app         lifecycle engine (Init/Run/Stop) + one module per startup stage
 internal/config      config.yml parsing
   envsubst/          ${VAR}/${VAR:-default} expansion (config.yml + api-spec.yaml)
 internal/spec        api-spec.yaml parsing + validation (kin-openapi doc + x-temporal)

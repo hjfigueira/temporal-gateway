@@ -14,7 +14,7 @@ graceful-shutdown wiring.
 
 ## Decision
 
-`main.go`'s `newServer` sets explicit `ReadHeaderTimeout` (10s),
+`internal/app`'s `newServer` sets explicit `ReadHeaderTimeout` (10s),
 `ReadTimeout`/`WriteTimeout` (30s), and `IdleTimeout` (60s). `serve` listens
 for `SIGINT`/`SIGTERM` and calls `server.Shutdown` with a bounded
 `shutdownTimeout` (10s), giving in-flight requests a chance to finish
@@ -27,7 +27,7 @@ same shutdown path.
   up to 10s to finish before the connection is forced closed — callers
   making long-running `getResult` calls should be aware shutdown doesn't
   wait indefinitely.
-- Every fallible setup stage in `run()` returns an error rather than
+- Every fallible setup stage (an `internal/app` module's `Init`) returns an error rather than
   calling `os.Exit` directly, so deferred cleanup (closing Temporal
   connections, flushing telemetry) always runs; `os.Exit` is called
-  exactly once, in `main`, after `run` has already unwound.
+  exactly once, in `main`, after `app.Run` has already unwound (ADR-032).

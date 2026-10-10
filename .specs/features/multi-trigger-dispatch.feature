@@ -1,4 +1,5 @@
 # See .specs/adr/active/0002-triggers-list-and-returnstrategy-for-multi-workflow-fan-out.md
+# See .specs/adr/active/0033-typed-dispatch-outcomes-and-action-neutral-batch-statuses.md
 # Code: internal/gateway/dispatch_handler.go, internal/spec/spec.go
 #       (TemporalSpec, ReturnStrategy), internal/response/response.go
 #       (BatchResult)
@@ -63,6 +64,19 @@ Feature: Multi-trigger dispatch and returnStrategy
       | 2         | 2     | WORKFLOW_STARTED       | 202          |
       | 0         | 2     | WORKFLOW_NOT_STARTED   | 409          |
       | 1         | 2     | WORKFLOW_NOT_STARTED   | 409          |
+
+  Scenario Outline: A batch that isn't all startWorkflow uses action-neutral statuses
+    Given 2 triggers on one operation, at least one of which is not a startWorkflow
+    And <succeeded> of 2 triggers succeed
+    Then the top-level status is "<status>"
+    And the message reads "<succeeded> of 2 trigger(s) succeeded"
+    # The HTTP status and returnStrategy rules are the same as above.
+
+    Examples:
+      | succeeded | status                    |
+      | 2         | BATCH_SUCCEEDED           |
+      | 1         | BATCH_PARTIALLY_SUCCEEDED |
+      | 0         | BATCH_FAILED              |
 
   Scenario: Every trigger's own result is always present in the response
     Given a multi-trigger operation under either returnStrategy

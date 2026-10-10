@@ -29,6 +29,13 @@ const (
 	StatusWorkflowPartiallyStarted Status = "WORKFLOW_PARTIALLY_STARTED"
 	StatusWorkflowNotStarted       Status = "WORKFLOW_NOT_STARTED"
 
+	// StatusBatchSucceeded The same three top-level outcomes for a batch
+	// whose triggers aren't all startWorkflow (a signal fan-out, say), where
+	// "started" would be wrong.
+	StatusBatchSucceeded          Status = "BATCH_SUCCEEDED"
+	StatusBatchPartiallySucceeded Status = "BATCH_PARTIALLY_SUCCEEDED"
+	StatusBatchFailed             Status = "BATCH_FAILED"
+
 	// StatusWorkflowRunning Outcomes for a startWorkflow binding that succeeded without creating
 	// a new run: the workflow ID was already in use, and the configured
 	// WorkflowIDConflictPolicy/WorkflowIDReusePolicy allowed the call to
@@ -60,6 +67,7 @@ const (
 func (s Status) IsError() bool {
 	switch s {
 	case StatusWorkflowPartiallyStarted, StatusWorkflowNotStarted,
+		StatusBatchPartiallySucceeded, StatusBatchFailed,
 		StatusWorkflowRunning, StatusWorkflowCompleted, StatusWorkflowFailed,
 		StatusWorkflowCancelled, StatusWorkflowTerminated, StatusWorkflowTimedOut,
 		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
@@ -77,14 +85,29 @@ type Envelope struct {
 	Message string `json:"message,omitempty"`
 }
 
-// GetStatus returns the envelope's status. Since every response type in
-// this package embeds Envelope, this method is promoted onto all of them,
-// letting a caller extract the outcome from an opaque result value (e.g.
-// dispatchOutcome.result, typed as any) via a single-method interface
-// instead of a type switch over every concrete response type.
-func (e Envelope) GetStatus() Status {
-	return e.Status
+// Outcome is what one dispatched Temporal action produced. Body is written
+// as that action's JSON response. Status is Body's own envelope status when
+// Body is an acknowledgement (start/signal/cancel/terminate), and empty when
+// Body is the action's raw result (queryWorkflow, getResult - ADR-010).
+type Outcome struct {
+	Body   any
+	Status Status
 }
+
+// Ack is the Outcome for an acknowledgement whose envelope is env.
+func Ack(body any, env Envelope) Outcome { return Outcome{Body: body, Status: env.Status} }
+
+// Raw is the Outcome for an action's raw result.
+func Raw(body any) Outcome { return Outcome{Body: body} }
+
+// Succeeded reports whether the action did what was asked: a nil error
+// alone isn't enough, e.g. a startWorkflow can return normally after
+// attaching to an existing run (StatusWorkflowRunning).
+func (o Outcome) Succeeded() bool { return !o.Status.IsError() }
+
+// IsRaw reports whether Body is an action's raw result, not an
+// acknowledgement.
+func (o Outcome) IsRaw() bool { return o.Status == "" }
 
 // WorkflowStarted is returned when a startWorkflow binding successfully
 // dispatches: the envelope plus the identifiers needed to address the new
@@ -115,7 +138,7 @@ type WorkflowAck struct {
 // than one x-temporal binding in a single call: the overall envelope -
 // StatusWorkflowStarted if every binding succeeded, StatusWorkflowNotStarted
 // if none did, or StatusWorkflowPartiallyStarted if it's a genuine mix of
-// both - plus each binding's own per-item result (a
+// both (StatusBatch* when not every binding is a startWorkflow) - plus each binding's own per-item result (a
 // WorkflowStarted/WorkflowSignaled/WorkflowAck on success, or an Envelope
 // naming the failure).
 type BatchResult struct {

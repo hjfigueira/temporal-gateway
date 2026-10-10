@@ -35,134 +35,58 @@ var tracer = otel.Tracer("temporal-gateway")
 // result or err is set, never both.
 type dispatchOutcome struct {
 	workflowID string
-	result     any
+	result     response.Outcome
 	err        error
 }
 
-// statusGetter is satisfied by every response type in internal/response
-// (via Envelope's promoted GetStatus method), letting dispatchHandler read
-// a dispatch outcome's Status without a type switch over every concrete
-// response type.
-type statusGetter interface {
-	GetStatus() response.Status
+// rejection is a request turned away before anything was dispatched.
+type rejection struct {
+	code   int
+	body   any
+	reason string // the span's error status
+	err    error  // recorded on the span when set
 }
 
-// succeeded reports whether a dispatch outcome actually did what was
-// asked. A nil Go error alone isn't enough: e.g. a startWorkflow binding
-// can return successfully while attaching to an already-existing run
-// instead of creating a new one (see internal/temporal.classifyExistingRun),
-// which is a Status.IsError() outcome despite there being no error. Only
-// called for outcomes whose err is nil (see collectResults).
-func (o dispatchOutcome) succeeded() bool {
-	if sg, ok := o.result.(statusGetter); ok {
-		return !sg.GetStatus().IsError()
+func (rej *rejection) write(w http.ResponseWriter, span trace.Span) {
+	if rej.err != nil {
+		span.RecordError(rej.err)
 	}
-	return true
+	span.SetStatus(codes.Error, rej.reason)
+	writeJSON(w, rej.code, rej.body)
 }
 
-// dispatchHandler decodes the request, validates it against its OpenAPI
-// operation (see validateRequest), renders every trigger's workflowId, then
-// dispatches the operation's x-temporal.triggers in parallel (see
-// dispatchAll). One trigger reports its own result; more
-// than one report a response.BatchResult (see writeBatchResult).
+// dispatchHandler reads and validates the request against its OpenAPI
+// operation, renders every trigger's workflowId, then dispatches the
+// operation's x-temporal.triggers in parallel (see dispatchAll). One
+// trigger reports its own result; more than one report a
+// response.BatchResult (see writeBatchResult).
 func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
 	bindings := route.Operation.Temporal.Triggers
 	returnStrategy := route.Operation.Temporal.Strategy()
+	vocab := batchVocabularyFor(bindings)
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		// This is the first span for the request: its trace context flows
-		// through dispatchAll into dispatcher.Dispatch and on to
-		// client.ExecuteWorkflow/SignalWorkflow/etc, where
-		// go.temporal.io/sdk/contrib/opentelemetry's interceptor (see
-		// internal/temporal.NewClient) propagates it into the Temporal
-		// request's Header - so the workflow this request dispatches
-		// continues the same trace.
-		ctx, span := tracer.Start(r.Context(), route.Operation.OperationID,
-			trace.WithAttributes(
-				attribute.String("temporal_gateway.operation_id", route.Operation.OperationID),
-				attribute.String("http.method", route.Method),
-				attribute.String("http.route", route.Path),
-			),
-		)
+		ctx, span, requestLogger := startRequestSpan(r, route, logger)
 		defer span.End()
-
-		// Enrich the request's logs with the span's identifiers so they can
-		// be correlated with the trace in the OTel backend. A no-op span
-		// (telemetry disabled) has an invalid SpanContext, so logs stay
-		// unchanged in that case.
-		requestLogger := logger
-		if sc := span.SpanContext(); sc.IsValid() {
-			requestLogger = logger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
-		}
 
 		pathParams := make(map[string]string, len(paramNames))
 		for _, name := range paramNames {
 			pathParams[name] = r.PathValue(name)
 		}
 
-		var raw []byte
-		var body any
-		if r.Body != nil {
-			// The error from closing a request body isn't actionable (the
-			// request handling is already complete either way), but discard
-			// it explicitly rather than leaving it unchecked.
-			defer func() { _ = r.Body.Close() }()
-			if opts.MaxBodyBytes > 0 {
-				r.Body = http.MaxBytesReader(w, r.Body, opts.MaxBodyBytes)
-			}
-			var err error
-			if raw, err = io.ReadAll(r.Body); err == nil {
-				body, err = decodeBody(bytes.NewReader(raw))
-			}
-			if err != nil {
-				span.RecordError(err)
-				var tooLarge *http.MaxBytesError
-				if errors.As(err, &tooLarge) {
-					span.SetStatus(codes.Error, "request body too large")
-					writeJSON(w, http.StatusRequestEntityTooLarge, response.Envelope{Status: response.StatusPayloadTooLarge, Message: fmt.Sprintf("request body exceeds %d bytes", tooLarge.Limit)})
-					return
-				}
-				span.SetStatus(codes.Error, "invalid JSON body")
-				writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()})
-				return
-			}
-		}
-
-		if fields := validateRequest(ctx, route.OpenAPI, r, raw, pathParams); fields != nil {
-			span.SetStatus(codes.Error, string(response.StatusValidationFailed))
-			// Field names only: the values may be sensitive.
-			requestLogger.Info("request failed validation",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"fields", slices.Sorted(maps.Keys(fields)),
-			)
-			issues := 0
-			for _, messages := range fields {
-				issues += len(messages)
-			}
-			writeJSON(w, http.StatusUnprocessableEntity, response.ValidationFailed{
-				Envelope: response.Envelope{Status: response.StatusValidationFailed, Message: fmt.Sprintf("validation failed: %d issue(s) found", issues)},
-				Fields:   fields,
-			})
+		raw, body, rej := readBody(w, r, opts.MaxBodyBytes)
+		if rej != nil {
+			rej.write(w, span)
 			return
 		}
-
-		// Render every workflowId before dispatching any, so a request
-		// missing a templated field dispatches nothing rather than acting
-		// on a literal "{...}" ID shared by every such request.
-		src := templating.Source{PathParams: pathParams, Query: r.URL.Query(), Header: r.Header, Body: body}
-		workflowIDs := make([]string, len(bindings))
-		var unresolved []string
-		for i, binding := range bindings {
-			var missing []string
-			workflowIDs[i], missing = templating.Render(binding.WorkflowID, src)
-			unresolved = append(unresolved, missing...)
+		if rej := checkRequest(ctx, route, r, raw, pathParams, requestLogger); rej != nil {
+			rej.write(w, span)
+			return
 		}
-		if len(unresolved) > 0 {
-			span.SetStatus(codes.Error, "unresolved workflowId placeholder")
-			writeJSON(w, http.StatusUnprocessableEntity, response.Envelope{Status: response.StatusInvalidRequest, Message: "request is missing values for workflowId placeholder(s): " + strings.Join(unresolved, ", ")})
+		workflowIDs, rej := renderWorkflowIDs(bindings, templating.Source{PathParams: pathParams, Query: r.URL.Query(), Header: r.Header, Body: body})
+		if rej != nil {
+			rej.write(w, span)
 			return
 		}
 
@@ -187,8 +111,118 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 			writeJSON(w, statuses[0], items[0])
 			return
 		}
-		writeBatchResult(w, items, statuses, succeeded, returnStrategy)
+		writeBatchResult(w, items, statuses, succeeded, returnStrategy, vocab)
 	}
+}
+
+// startRequestSpan starts the request's first span, and a logger carrying
+// its trace/span IDs. The trace context flows through dispatchAll into
+// dispatcher.Dispatch and on to client.ExecuteWorkflow/SignalWorkflow/etc,
+// where go.temporal.io/sdk/contrib/opentelemetry's interceptor (see
+// internal/temporal.NewClient) propagates it into the Temporal request's
+// Header - so the workflow this request dispatches continues the same
+// trace.
+func startRequestSpan(r *http.Request, route spec.Route, logger *slog.Logger) (context.Context, trace.Span, *slog.Logger) {
+	ctx, span := tracer.Start(r.Context(), route.Operation.OperationID,
+		trace.WithAttributes(
+			attribute.String("temporal_gateway.operation_id", route.Operation.OperationID),
+			attribute.String("http.method", route.Method),
+			attribute.String("http.route", route.Path),
+		),
+	)
+	// A no-op span (telemetry disabled) has an invalid SpanContext, so logs
+	// stay unchanged in that case.
+	if sc := span.SpanContext(); sc.IsValid() {
+		logger = logger.With("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+	}
+	return ctx, span, logger
+}
+
+// readBody reads the request body, capped at maxBytes (0 = no cap), and
+// decodes it as JSON. It returns the raw bytes too, for validateRequest.
+func readBody(w http.ResponseWriter, r *http.Request, maxBytes int64) ([]byte, any, *rejection) {
+	if r.Body == nil {
+		return nil, nil, nil
+	}
+	// The error from closing a request body isn't actionable (the request
+	// handling is already complete either way), but discard it explicitly
+	// rather than leaving it unchecked.
+	defer func() { _ = r.Body.Close() }()
+	if maxBytes > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	}
+	raw, err := io.ReadAll(r.Body)
+	var body any
+	if err == nil {
+		body, err = decodeBody(bytes.NewReader(raw))
+	}
+	if err == nil {
+		return raw, body, nil
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return nil, nil, &rejection{
+			code:   http.StatusRequestEntityTooLarge,
+			body:   response.Envelope{Status: response.StatusPayloadTooLarge, Message: fmt.Sprintf("request body exceeds %d bytes", tooLarge.Limit)},
+			reason: "request body too large",
+			err:    err,
+		}
+	}
+	return nil, nil, &rejection{
+		code:   http.StatusUnprocessableEntity,
+		body:   response.Envelope{Status: response.StatusInvalidRequest, Message: "invalid JSON body: " + err.Error()},
+		reason: "invalid JSON body",
+		err:    err,
+	}
+}
+
+// checkRequest validates the request against its OpenAPI operation (see
+// validateRequest), rejecting it with every problem found.
+func checkRequest(ctx context.Context, route spec.Route, r *http.Request, raw []byte, pathParams map[string]string, logger *slog.Logger) *rejection {
+	fields := validateRequest(ctx, route.OpenAPI, r, raw, pathParams)
+	if fields == nil {
+		return nil
+	}
+	// Field names only: the values may be sensitive.
+	logger.Info("request failed validation",
+		"operation_id", route.Operation.OperationID,
+		"method", route.Method,
+		"path", route.Path,
+		"fields", slices.Sorted(maps.Keys(fields)),
+	)
+	issues := 0
+	for _, messages := range fields {
+		issues += len(messages)
+	}
+	return &rejection{
+		code: http.StatusUnprocessableEntity,
+		body: response.ValidationFailed{
+			Envelope: response.Envelope{Status: response.StatusValidationFailed, Message: fmt.Sprintf("validation failed: %d issue(s) found", issues)},
+			Fields:   fields,
+		},
+		reason: string(response.StatusValidationFailed),
+	}
+}
+
+// renderWorkflowIDs renders every binding's workflowId before any is
+// dispatched, so a request missing a templated field dispatches nothing
+// rather than acting on a literal "{...}" ID shared by every such request.
+func renderWorkflowIDs(bindings []spec.TemporalBinding, src templating.Source) ([]string, *rejection) {
+	workflowIDs := make([]string, len(bindings))
+	var unresolved []string
+	for i, binding := range bindings {
+		var missing []string
+		workflowIDs[i], missing = templating.Render(binding.WorkflowID, src)
+		unresolved = append(unresolved, missing...)
+	}
+	if len(unresolved) > 0 {
+		return nil, &rejection{
+			code:   http.StatusUnprocessableEntity,
+			body:   response.Envelope{Status: response.StatusInvalidRequest, Message: "request is missing values for workflowId placeholder(s): " + strings.Join(unresolved, ", ")},
+			reason: "unresolved workflowId placeholder",
+		}
+	}
+	return workflowIDs, nil
 }
 
 // decodeBody decodes a JSON request body, or returns nil for an empty one.
@@ -242,7 +276,7 @@ func dispatchOne(ctx context.Context, dispatcher Dispatcher, binding spec.Tempor
 	outcome.workflowID = workflowID
 	defer func() {
 		if r := recover(); r != nil {
-			outcome.result, outcome.err = nil, fmt.Errorf("dispatch panicked: %v", r)
+			outcome.result, outcome.err = response.Outcome{}, fmt.Errorf("dispatch panicked: %v", r)
 		}
 	}()
 	outcome.result, outcome.err = dispatcher.Dispatch(ctx, binding, workflowID, body)
@@ -251,7 +285,7 @@ func dispatchOne(ctx context.Context, dispatcher Dispatcher, binding spec.Tempor
 
 // collectResults turns each dispatch outcome into its response item and
 // HTTP status, logs it, and counts how many bindings actually succeeded
-// (see dispatchOutcome.succeeded).
+// (see response.Outcome.Succeeded).
 func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes []dispatchOutcome, logger *slog.Logger) (items []any, statuses []int, succeeded int) {
 	items = make([]any, len(outcomes))
 	statuses = make([]int, len(outcomes))
@@ -277,13 +311,10 @@ func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes 
 			continue
 		}
 
-		items[i] = outcome.result
-		if outcome.succeeded() {
+		items[i] = outcome.result.Body
+		if outcome.result.Succeeded() {
 			succeeded++
-			statuses[i] = statusByAction[binding.Action]
-			if statuses[i] == 0 {
-				statuses[i] = http.StatusOK
-			}
+			statuses[i] = successStatus(outcome.result)
 			logger.Info("handled request",
 				"operation_id", route.Operation.OperationID,
 				"method", route.Method,
@@ -298,18 +329,48 @@ func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes 
 		// already-existing run instead of creating one) - treat it the
 		// same as a failure for status-code and batch-accounting purposes.
 		statuses[i] = http.StatusConflict
-		if sg, ok := outcome.result.(statusGetter); ok {
-			logger.Info("temporal dispatch did not start a new run",
-				"operation_id", route.Operation.OperationID,
-				"method", route.Method,
-				"path", route.Path,
-				"workflow_id", outcome.workflowID,
-				"status", sg.GetStatus(),
-			)
-		}
+		logger.Info("temporal dispatch did not start a new run",
+			"operation_id", route.Operation.OperationID,
+			"method", route.Method,
+			"path", route.Path,
+			"workflow_id", outcome.workflowID,
+			"status", outcome.result.Status,
+		)
 	}
 
 	return items, statuses, succeeded
+}
+
+// successStatus is the HTTP status for a succeeded outcome: 200 for an
+// action's raw result (queryWorkflow, getResult), 202 for an
+// acknowledgement of work Temporal carries on asynchronously.
+func successStatus(o response.Outcome) int {
+	if o.IsRaw() {
+		return http.StatusOK
+	}
+	return http.StatusAccepted
+}
+
+// batchVocabulary names a multi-trigger outcome's top-level statuses.
+type batchVocabulary struct {
+	all, partial, none response.Status
+	noun               string // completes "N of M ..."
+}
+
+var (
+	startBatch = batchVocabulary{response.StatusWorkflowStarted, response.StatusWorkflowPartiallyStarted, response.StatusWorkflowNotStarted, "workflow(s) started"}
+	mixedBatch = batchVocabulary{response.StatusBatchSucceeded, response.StatusBatchPartiallySucceeded, response.StatusBatchFailed, "trigger(s) succeeded"}
+)
+
+// batchVocabularyFor speaks of workflows started only when every binding
+// starts one, so e.g. a signal fan-out doesn't claim "WORKFLOW_STARTED".
+func batchVocabularyFor(bindings []spec.TemporalBinding) batchVocabulary {
+	for _, b := range bindings {
+		if b.Action != spec.ActionStartWorkflow {
+			return mixedBatch
+		}
+	}
+	return startBatch
 }
 
 // writeBatchResult picks the top-level response.BatchResult status and HTTP
@@ -324,38 +385,26 @@ func collectResults(route spec.Route, bindings []spec.TemporalBinding, outcomes 
 //     caller can see exactly which triggers succeeded; a uniform failure
 //     (none did) isn't a "multi" status, so it gets an ordinary single
 //     status code from the first item instead.
-func writeBatchResult(w http.ResponseWriter, items []any, statuses []int, succeeded int, strategy spec.ReturnStrategy) {
+func writeBatchResult(w http.ResponseWriter, items []any, statuses []int, succeeded int, strategy spec.ReturnStrategy, vocab batchVocabulary) {
 	total := len(items)
-	message := fmt.Sprintf("%d of %d workflow(s) started", succeeded, total)
-
-	if succeeded == total {
-		writeJSON(w, statuses[0], response.BatchResult{
-			Envelope: response.Envelope{Status: response.StatusWorkflowStarted, Message: message},
+	message := fmt.Sprintf("%d of %d %s", succeeded, total, vocab.noun)
+	write := func(code int, status response.Status) {
+		writeJSON(w, code, response.BatchResult{
+			Envelope: response.Envelope{Status: status, Message: message},
 			Results:  items,
 		})
-		return
 	}
 
-	if strategy == spec.ReturnStrategyAllOrNothing {
-		writeJSON(w, http.StatusConflict, response.BatchResult{
-			Envelope: response.Envelope{Status: response.StatusWorkflowNotStarted, Message: message},
-			Results:  items,
-		})
-		return
+	switch {
+	case succeeded == total:
+		write(statuses[0], vocab.all)
+	case strategy == spec.ReturnStrategyAllOrNothing:
+		write(http.StatusConflict, vocab.none)
+	case succeeded == 0:
+		write(statuses[0], vocab.none)
+	default:
+		write(http.StatusMultiStatus, vocab.partial)
 	}
-
-	if succeeded == 0 {
-		writeJSON(w, statuses[0], response.BatchResult{
-			Envelope: response.Envelope{Status: response.StatusWorkflowNotStarted, Message: message},
-			Results:  items,
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusMultiStatus, response.BatchResult{
-		Envelope: response.Envelope{Status: response.StatusWorkflowPartiallyStarted, Message: message},
-		Results:  items,
-	})
 }
 
 // workflowLabel names a binding for inclusion in a failure message, so a

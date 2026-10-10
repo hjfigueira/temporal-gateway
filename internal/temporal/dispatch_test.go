@@ -31,7 +31,8 @@ func dispatch(t *testing.T, d *Dispatcher, b spec.TemporalBinding, body any) (an
 	if b.Namespace == "" {
 		b.Namespace = "default"
 	}
-	return d.Dispatch(context.Background(), b, "wf-1", body)
+	out, err := d.Dispatch(context.Background(), b, "wf-1", body)
+	return out.Body, err
 }
 
 func TestDispatchActions(t *testing.T) {
@@ -224,5 +225,24 @@ func TestStartWorkflowReportsAttachedRunState(t *testing.T) {
 	}
 	if s := got.(response.WorkflowStarted).Status; s != response.StatusWorkflowRunning {
 		t.Errorf("describe failed: status = %q, want fallback %q", s, response.StatusWorkflowRunning)
+	}
+}
+
+func TestEverySpecActionIsImplemented(t *testing.T) {
+	for _, a := range spec.Actions() {
+		if actions[a] == nil {
+			t.Errorf("spec accepts %q but temporal has no implementation for it", a)
+		}
+	}
+	if len(actions) != len(spec.Actions()) {
+		t.Errorf("temporal implements %d actions, spec accepts %d", len(actions), len(spec.Actions()))
+	}
+}
+
+func TestDispatchOutcomeStatus(t *testing.T) {
+	_, d := newFakeDispatcher(t)
+	out, err := d.Dispatch(context.Background(), spec.TemporalBinding{Action: spec.ActionSignalWorkflow, Namespace: "default", SignalName: "approve"}, "wf-1", nil)
+	if err != nil || out.Status != response.StatusSignaled || out.IsRaw() {
+		t.Fatalf("signal outcome = %+v, %v; want a SIGNALED acknowledgement", out, err)
 	}
 }

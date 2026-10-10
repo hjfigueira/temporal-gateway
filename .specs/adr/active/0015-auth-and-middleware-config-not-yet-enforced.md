@@ -11,7 +11,7 @@ since there is none to specify.
 
 `AuthConfig` (`type: none|apiKey|jwt`) and `MiddlewareConfig`
 (name/enabled/free-form config) exist in `internal/config/gateway.go` and
-are logged at startup (`main.go`'s `logStartup`), but nothing in
+are logged at startup (`internal/app`'s `LogStartup` module), but nothing in
 `internal/gateway` currently reads or enforces either against an incoming
 request.
 

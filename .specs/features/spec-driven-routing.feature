@@ -1,5 +1,5 @@
 # See .specs/adr/active/0001-spec-driven-architecture-no-handler-code.md
-# Code: main.go, internal/spec/spec.go, internal/spec/route.go,
+# Code: internal/app/server.go (API), internal/spec/spec.go, internal/spec/route.go,
 #       internal/gateway/gateway.go
 
 Feature: Spec-driven routing

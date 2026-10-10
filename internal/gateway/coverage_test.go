@@ -44,17 +44,23 @@ func TestNewHandlerRoutesPathParamsAndLabelsActionlessFailures(t *testing.T) {
 	}
 }
 
-// TestDispatchHandlerTracesAndDefaultsUnmappedActionTo200 runs with a real
-// TracerProvider (so the request logger gets trace/span IDs) and a binding
-// whose action has no statusByAction entry.
-func TestDispatchHandlerTracesAndDefaultsUnmappedActionTo200(t *testing.T) {
+// rawDispatcher answers every dispatch with a raw result, like a query.
+type rawDispatcher struct{}
+
+func (rawDispatcher) Dispatch(context.Context, spec.TemporalBinding, string, any) (response.Outcome, error) {
+	return response.Raw(map[string]string{"total": "42"}), nil
+}
+
+// TestDispatchHandlerTracesAndAnswersRawResultsWith200 runs with a real
+// TracerProvider (so the request logger gets trace/span IDs) and a
+// dispatcher returning a raw result, which gets 200 rather than 202.
+func TestDispatchHandlerTracesAndAnswersRawResultsWith200(t *testing.T) {
 	prev := otel.GetTracerProvider()
 	otel.SetTracerProvider(sdktrace.NewTracerProvider())
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 
 	route := twoBindingRouteSingle()
-	route.Operation.Temporal.Triggers[0].Action = "customAction"
-	handler := dispatchHandler(route, &trackingDispatcher{}, Options{}, discard())
+	handler := dispatchHandler(route, rawDispatcher{}, Options{}, discard())
 
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`)))

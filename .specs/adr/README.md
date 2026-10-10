@@ -52,6 +52,8 @@ which.
 | [0029](active/0029-validate-requests-with-kin-openapi.md) | Validate requests from the OpenAPI spec with kin-openapi |
 | [0030](active/0030-merge-spec-files-as-raw-yaml.md) | Spec files are merged as raw YAML before parsing |
 | [0031](active/0031-task-queue-from-workflow-catalog.md) | A startWorkflow's task queue may come from the workflow catalog |
+| [0032](active/0032-lifecycle-modules-in-internal-app.md) | Startup and shutdown as ordered lifecycle modules in `internal/app` |
+| [0033](active/0033-typed-dispatch-outcomes-and-action-neutral-batch-statuses.md) | Typed dispatch outcomes, action tables, and action-neutral batch statuses |
 
 ## Adding a new decision
 

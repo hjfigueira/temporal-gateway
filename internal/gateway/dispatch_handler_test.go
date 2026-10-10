@@ -34,7 +34,7 @@ type trackingDispatcher struct {
 	seen map[string]bool
 }
 
-func (d *trackingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (any, error) {
+func (d *trackingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (response.Outcome, error) {
 	d.mu.Lock()
 	if d.seen == nil {
 		d.seen = map[string]bool{}
@@ -43,18 +43,18 @@ func (d *trackingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding,
 	d.mu.Unlock()
 
 	if d.failIDs[workflowID] {
-		return nil, fmt.Errorf("dispatch failed for %s", workflowID)
+		return response.Outcome{}, fmt.Errorf("dispatch failed for %s", workflowID)
 	}
 	if d.existingIDs[workflowID] {
-		return response.WorkflowStarted{
-			Envelope:   response.Envelope{Status: response.StatusWorkflowRunning, Message: "a workflow with this ID is already running"},
-			WorkflowID: workflowID,
-		}, nil
+		return started(response.StatusWorkflowRunning, workflowID), nil
 	}
-	return response.WorkflowStarted{
-		Envelope:   response.Envelope{Status: response.StatusStarted},
-		WorkflowID: workflowID,
-	}, nil
+	return started(response.StatusStarted, workflowID), nil
+}
+
+// started is a startWorkflow acknowledgement with status.
+func started(status response.Status, workflowID string) response.Outcome {
+	r := response.WorkflowStarted{Envelope: response.Envelope{Status: status}, WorkflowID: workflowID}
+	return response.Ack(r, r.Envelope)
 }
 
 func (d *trackingDispatcher) wasDispatched(workflowID string) bool {
@@ -71,8 +71,8 @@ type failingDispatcher struct {
 	err error
 }
 
-func (d *failingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, _ string, _ any) (any, error) {
-	return nil, d.err
+func (d *failingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, _ string, _ any) (response.Outcome, error) {
+	return response.Outcome{}, d.err
 }
 
 func twoBindingRoute() spec.Route {
@@ -443,9 +443,9 @@ func TestDispatchHandlerAllOrNothingRejectsUniformFailure(t *testing.T) {
 // getResult on a workflow that outlives the request timeout.
 type deadlineDispatcher struct{}
 
-func (deadlineDispatcher) Dispatch(ctx context.Context, _ spec.TemporalBinding, _ string, _ any) (any, error) {
+func (deadlineDispatcher) Dispatch(ctx context.Context, _ spec.TemporalBinding, _ string, _ any) (response.Outcome, error) {
 	<-ctx.Done()
-	return nil, ctx.Err()
+	return response.Outcome{}, ctx.Err()
 }
 
 func decodeEnvelope(t *testing.T, rec *httptest.ResponseRecorder) response.Envelope {
@@ -537,9 +537,9 @@ type bodyDispatcher struct {
 	body       any
 }
 
-func (d *bodyDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, body any) (any, error) {
+func (d *bodyDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, body any) (response.Outcome, error) {
 	d.workflowID, d.body = workflowID, body
-	return response.WorkflowStarted{Envelope: response.Envelope{Status: response.StatusStarted}}, nil
+	return started(response.StatusStarted, ""), nil
 }
 
 func TestDispatchHandlerKeepsExactNumbers(t *testing.T) {
@@ -582,11 +582,11 @@ func TestDispatchHandlerRejectsTrailingData(t *testing.T) {
 
 type panickingDispatcher struct{}
 
-func (panickingDispatcher) Dispatch(_ context.Context, binding spec.TemporalBinding, workflowID string, _ any) (any, error) {
+func (panickingDispatcher) Dispatch(_ context.Context, binding spec.TemporalBinding, workflowID string, _ any) (response.Outcome, error) {
 	if binding.WorkflowType == "NotificationWorkflow" {
 		panic("boom")
 	}
-	return response.WorkflowStarted{Envelope: response.Envelope{Status: response.StatusStarted}, WorkflowID: workflowID}, nil
+	return started(response.StatusStarted, workflowID), nil
 }
 
 func TestDispatchHandlerRecoversPanickingTrigger(t *testing.T) {
@@ -601,5 +601,32 @@ func TestDispatchHandlerRecoversPanickingTrigger(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "boom") {
 		t.Errorf("panic value leaked to the client: %s", rec.Body.String())
+	}
+}
+
+// TestBatchOfSignalsDoesNotClaimStarted: a batch that isn't all
+// startWorkflow uses the action-neutral BATCH_* statuses.
+func TestBatchOfSignalsDoesNotClaimStarted(t *testing.T) {
+	route := twoBindingRoute()
+	for i := range route.Operation.Temporal.Triggers {
+		route.Operation.Temporal.Triggers[i].Action = spec.ActionSignalWorkflow
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	for _, tt := range []struct {
+		failIDs map[string]bool
+		code    int
+		status  response.Status
+		message string
+	}{
+		{nil, http.StatusAccepted, response.StatusBatchSucceeded, "2 of 2 trigger(s) succeeded"},
+		{map[string]bool{"order-o1": true}, http.StatusMultiStatus, response.StatusBatchPartiallySucceeded, "1 of 2 trigger(s) succeeded"},
+	} {
+		rec := httptest.NewRecorder()
+		dispatchHandler(route, &trackingDispatcher{failIDs: tt.failIDs}, Options{}, logger)(rec, httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"orderId":"o1"}`)))
+		envelope := decodeEnvelope(t, rec)
+		if rec.Code != tt.code || envelope.Status != tt.status || envelope.Message != tt.message {
+			t.Errorf("got %d %+v, want %d %s %q", rec.Code, envelope, tt.code, tt.status, tt.message)
+		}
 	}
 }

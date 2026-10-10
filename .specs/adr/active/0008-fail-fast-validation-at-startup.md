@@ -33,7 +33,7 @@ starting the server, for use in CI or a pre-deploy check.
 
 ## Consequences
 
-- `main.go`'s `run` is a straight-line sequence of fallible stages, each
+- `app.Run` drives a straight-line sequence of fallible stages (ADR-032), each
   returning an error immediately rather than the gateway limping into a
   half-valid running state.
 - Validation errors are collected and joined (`errors.Join`), so a spec

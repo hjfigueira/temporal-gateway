@@ -18,7 +18,7 @@ import (
 // claims StatusStarted when the server reports a fresh run was created;
 // otherwise it reports the existing run's real state via
 // classifyExistingRun.
-func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (any, error) {
+func startWorkflow(ctx context.Context, conn *Connection, binding spec.TemporalBinding, workflowID string, body any) (response.Outcome, error) {
 	taskQueue := binding.TaskQueue
 	if taskQueue == "" {
 		taskQueue, _ = conn.Catalog.TaskQueueFor(binding.WorkflowType)
@@ -39,7 +39,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 	if len(binding.SearchAttributes) > 0 {
 		attrs, err := buildTypedSearchAttributes(binding.SearchAttributes)
 		if err != nil {
-			return nil, fmt.Errorf("x-temporal searchAttributes: %w", err)
+			return response.Outcome{}, fmt.Errorf("x-temporal searchAttributes: %w", err)
 		}
 		options.TypedSearchAttributes = attrs
 	}
@@ -74,7 +74,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 		}
 	}
 
-	var args []interface{}
+	var args []any
 	if body != nil {
 		args = append(args, body)
 	}
@@ -89,7 +89,7 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 	startCtx, started := withStartedFlag(ctx)
 	run, err := conn.Client().ExecuteWorkflow(startCtx, options, binding.WorkflowType, args...)
 	if err != nil {
-		return nil, err
+		return response.Outcome{}, err
 	}
 
 	status, message := response.StatusStarted, ""
@@ -97,11 +97,12 @@ func (d *Dispatcher) startWorkflow(ctx context.Context, conn *Connection, bindin
 		status, message = existingRunStatus(ctx, conn, run.GetID(), run.GetRunID())
 	}
 
-	return response.WorkflowStarted{
+	result := response.WorkflowStarted{
 		Envelope:   response.Envelope{Status: status, Message: message},
 		WorkflowID: run.GetID(),
 		RunID:      run.GetRunID(),
-	}, nil
+	}
+	return response.Ack(result, result.Envelope), nil
 }
 
 // existingRunStatus describes the run a start attached to, to report its

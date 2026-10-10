@@ -48,7 +48,8 @@ and not per-trigger?") without realizing it was deliberate.
 ## Project layout
 
 ```
-main.go              entrypoint: loads config/spec, wires everything, serves HTTP
+main.go              entrypoint: only main(); lists the internal/app modules in order
+internal/app         lifecycle engine (Init/Run/Stop) + one module per startup stage
 internal/config      config.yml parsing
   envsubst/          ${VAR}/${VAR:-default} expansion (config.yml + api-spec.yaml)
 internal/spec        api-spec.yaml parsing + validation (kin-openapi doc + x-temporal)

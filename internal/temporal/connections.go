@@ -12,7 +12,6 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"temporal-gateway/internal/config"
-	"temporal-gateway/internal/spec"
 )
 
 // Connection is one configured Temporal namespace: its workflow catalog
@@ -23,6 +22,7 @@ type Connection struct {
 	Catalog *Catalog
 
 	cfg    config.TemporalConnectionConfig
+	dial   DialFunc
 	client atomic.Pointer[client.Client]
 }
 
@@ -51,15 +51,15 @@ type Connections map[string]*Connection
 // dialing it.
 var errNotConnected = errors.New("not connected yet")
 
-// newClient is NewClient, swappable in tests.
-var newClient = NewClient
+// DialFunc dials one namespace's client. NewClient is the real one.
+type DialFunc func(ctx context.Context, cfg config.TemporalConnectionConfig, reconnect config.TemporalReconnectConfig, logger *slog.Logger) (client.Client, error)
 
 // NewConnections builds one not-yet-connected entry per cfg.Connections;
-// Connect dials them.
-func NewConnections(cfg config.TemporalConfig) Connections {
+// Connect dials them with dial.
+func NewConnections(cfg config.TemporalConfig, dial DialFunc) Connections {
 	conns := make(Connections, len(cfg.Connections))
 	for _, c := range cfg.Connections {
-		conns[c.Namespace] = &Connection{Catalog: NewCatalog(c.Workflows), cfg: c}
+		conns[c.Namespace] = &Connection{Catalog: NewCatalog(c.Workflows), cfg: c, dial: dial}
 	}
 	return conns
 }
@@ -73,7 +73,7 @@ func (c Connections) Connect(ctx context.Context, reconnect config.TemporalRecon
 	errs := make(chan error, len(c))
 	for namespace, conn := range c {
 		wg.Go(func() {
-			cl, err := newClient(ctx, conn.cfg, reconnect, logger)
+			cl, err := conn.dial(ctx, conn.cfg, reconnect, logger)
 			if err != nil {
 				errs <- fmt.Errorf("temporal: namespace %q: %w", namespace, err)
 				return
@@ -140,33 +140,4 @@ func (c Connections) CheckHealth(ctx context.Context) map[string]error {
 	}
 	wg.Wait()
 	return results
-}
-
-// ValidateBindings checks every x-temporal binding in apiSpec against
-// conns: its namespace must have a temporal.connections entry, and a
-// startWorkflow binding without its own taskQueue must find one in that
-// namespace's workflow catalog. Every problem is joined (rather than
-// stopping at the first) so every bad reference is reported in one pass.
-// Called once at startup, so a spec that doesn't match config.yml fails
-// before the server starts serving requests rather than as a per-request
-// dispatch error the first time that route is hit.
-func ValidateBindings(apiSpec *spec.Spec, conns Connections) error {
-	var errs []error
-	for _, route := range apiSpec.Routes() {
-		for i, binding := range route.Operation.Temporal.Triggers {
-			where := fmt.Sprintf("%s %s: x-temporal.triggers[%d]", route.Method, route.Path, i)
-			conn, ok := conns[binding.Namespace]
-			if !ok {
-				errs = append(errs, fmt.Errorf("%s: namespace %q has no temporal.connections entry in config", where, binding.Namespace))
-				continue
-			}
-			if binding.Action != spec.ActionStartWorkflow || binding.TaskQueue != "" {
-				continue
-			}
-			if _, ok := conn.Catalog.TaskQueueFor(binding.WorkflowType); !ok {
-				errs = append(errs, fmt.Errorf("%s: startWorkflow has no taskQueue, and namespace %q's workflows in config declare none for %q", where, binding.Namespace, binding.WorkflowType))
-			}
-		}
-	}
-	return errors.Join(errs...)
 }

@@ -3,8 +3,8 @@
 # See .specs/adr/active/0030-merge-spec-files-as-raw-yaml.md
 # See .specs/adr/active/0008-fail-fast-validation-at-startup.md
 # See .specs/adr/active/0027-godotenv-for-dotenv-loading.md
-# Code: internal/config/envsubst/envsubst.go, main.go (godotenv.Load),
-#       internal/config/spec_path.go, internal/spec/spec.go (mergeDoc), main.go
+# Code: internal/config/envsubst/envsubst.go, internal/app/startup.go (LoadDotEnv),
+#       internal/config/spec_path.go, internal/spec/spec.go (mergeDoc), internal/app/temporal.go (DryRun)
 
 Feature: Environment-aware config, .env loading, and multi-file specs
   config.yml and api-spec.yaml both support "${VAR}" / "${VAR:-default}"

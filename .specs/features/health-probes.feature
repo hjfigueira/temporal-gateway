@@ -2,7 +2,7 @@
 # See .specs/adr/active/0026-serve-http-before-temporal-connects.md
 # Code: internal/gateway/health/health.go, internal/temporal/connections.go
 #       (Connections.CheckHealth), internal/config/gateway.go (HealthConfig),
-#       main.go (startHealthServer, serve)
+#       internal/app/server.go (Health, API, startHealthServer, serve)
 
 Feature: Liveness and readiness probes
   The gateway serves GET /livez and GET /readyz on a separate health port.

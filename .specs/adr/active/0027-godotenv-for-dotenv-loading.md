@@ -20,7 +20,7 @@ mangle `$` in spec `pattern` regexes and secrets.
 
 ## Decision
 
-`main.go` calls `godotenv.Load(--env)` before loading config, and ignores
+The `LoadDotEnv` module (`internal/app`) calls `godotenv.Load(--env)` before loading config, and ignores
 only `fs.ErrNotExist`. The `internal/dotenv` package is deleted. godotenv
 keeps ADR-011's rule that variables already set in the real environment
 win over the file.

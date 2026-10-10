@@ -24,9 +24,9 @@ type recordingDispatcher struct {
 	called bool
 }
 
-func (d *recordingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (any, error) {
+func (d *recordingDispatcher) Dispatch(_ context.Context, _ spec.TemporalBinding, workflowID string, _ any) (response.Outcome, error) {
 	d.called = true
-	return map[string]string{"workflowId": workflowID}, nil
+	return started(response.StatusStarted, workflowID), nil
 }
 
 const ordersSpec = `openapi: 3.0.3

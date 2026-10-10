@@ -29,19 +29,18 @@ func connected(cl client.Client, catalog *Catalog) *Connection {
 
 func TestConnect_DialsConcurrentlyAndReportsEveryFailure(t *testing.T) {
 	const dialTime = 100 * time.Millisecond
-	newClient = func(ctx context.Context, c config.TemporalConnectionConfig, _ config.TemporalReconnectConfig, _ *slog.Logger) (client.Client, error) {
+	dial := func(ctx context.Context, c config.TemporalConnectionConfig, _ config.TemporalReconnectConfig, _ *slog.Logger) (client.Client, error) {
 		time.Sleep(dialTime)
 		if strings.HasPrefix(c.Namespace, "down") {
 			return nil, errUnavailable
 		}
 		return stubClient{}, nil
 	}
-	t.Cleanup(func() { newClient = NewClient })
 
 	cfg := config.TemporalConfig{Connections: []config.TemporalConnectionConfig{
 		{Namespace: "default"}, {Namespace: "down-a"}, {Namespace: "down-b"},
 	}}
-	conns := NewConnections(cfg)
+	conns := NewConnections(cfg, dial)
 	if len(conns) != 3 || conns["default"].Client() != nil {
 		t.Fatalf("NewConnections = %v, want 3 entries, none connected yet", conns)
 	}
@@ -62,7 +61,7 @@ func TestConnect_DialsConcurrentlyAndReportsEveryFailure(t *testing.T) {
 }
 
 func TestNotYetConnectedNamespace(t *testing.T) {
-	conns := NewConnections(config.TemporalConfig{Connections: []config.TemporalConnectionConfig{{Namespace: "default"}}})
+	conns := NewConnections(config.TemporalConfig{Connections: []config.TemporalConnectionConfig{{Namespace: "default"}}}, NewClient)
 
 	_, err := NewDispatcher(conns).Dispatch(context.Background(), spec.TemporalBinding{Action: spec.ActionCancelWorkflow, Namespace: "default"}, "wf", nil)
 	var unavailable *serviceerror.Unavailable
@@ -79,7 +78,7 @@ func TestValidateBindingsTaskQueueFromCatalog(t *testing.T) {
 	conns := NewConnections(config.TemporalConfig{Connections: []config.TemporalConnectionConfig{{
 		Namespace: "default",
 		Workflows: []config.WorkflowDefinition{{Name: "OrderWorkflow", TaskQueue: "orders"}},
-	}}})
+	}}}, NewClient)
 	start := func(workflowType, taskQueue string) spec.TemporalBinding {
 		return spec.TemporalBinding{Action: spec.ActionStartWorkflow, Namespace: "default", WorkflowType: workflowType, TaskQueue: taskQueue}
 	}

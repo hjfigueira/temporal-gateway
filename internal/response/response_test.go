@@ -62,6 +62,7 @@ func TestStatusIsError(t *testing.T) {
 	errorStatuses := []Status{
 		StatusDuplicated, StatusNotFound, StatusInvalidArgument, StatusForbidden,
 		StatusInvalidRequest, StatusValidationFailed, StatusPayloadTooLarge, StatusTimeout, StatusUnavailable, StatusFailed,
+		StatusBatchPartiallySucceeded, StatusBatchFailed,
 	}
 	for _, s := range errorStatuses {
 		if !s.IsError() {
@@ -69,7 +70,7 @@ func TestStatusIsError(t *testing.T) {
 		}
 	}
 
-	successStatuses := []Status{StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated}
+	successStatuses := []Status{StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated, StatusBatchSucceeded}
 	for _, s := range successStatuses {
 		if s.IsError() {
 			t.Errorf("%s.IsError() = true, want false", s)
@@ -77,9 +78,16 @@ func TestStatusIsError(t *testing.T) {
 	}
 }
 
-func TestGetStatusIsPromotedFromEnvelope(t *testing.T) {
-	r := WorkflowStarted{Envelope: Envelope{Status: StatusStarted}}
-	if got := r.GetStatus(); got != StatusStarted {
-		t.Fatalf("GetStatus() = %q, want %q", got, StatusStarted)
+func TestOutcome(t *testing.T) {
+	started := WorkflowStarted{Envelope: Envelope{Status: StatusStarted}}
+	if o := Ack(started, started.Envelope); !o.Succeeded() || o.IsRaw() {
+		t.Errorf("Ack(STARTED) = %+v, want a succeeded acknowledgement", o)
+	}
+	attached := Envelope{Status: StatusWorkflowRunning}
+	if o := Ack(attached, attached); o.Succeeded() {
+		t.Errorf("Ack(WORKFLOW_RUNNING) succeeded, want not")
+	}
+	if o := Raw(42); !o.Succeeded() || !o.IsRaw() {
+		t.Errorf("Raw(42) = %+v, want a succeeded raw result", o)
 	}
 }

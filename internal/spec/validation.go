@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -112,6 +113,34 @@ func (s *Spec) validateRequestSchemas() []error {
 	return errs
 }
 
+// actionRules checks the fields each action requires beyond namespace and
+// workflowId; an action missing here is unknown. A new action is an entry
+// here plus its implementation in internal/temporal.
+var actionRules = map[TemporalAction]func(method, path string, i int, t TemporalBinding) []error{
+	ActionStartWorkflow:     validateStartWorkflowBinding,
+	ActionSignalWorkflow:    requireField("signalWorkflow", "signalName", func(t TemporalBinding) string { return t.SignalName }),
+	ActionQueryWorkflow:     requireField("queryWorkflow", "queryType", func(t TemporalBinding) string { return t.QueryType }),
+	ActionCancelWorkflow:    noRules,
+	ActionTerminateWorkflow: noRules,
+	ActionGetResult:         noRules,
+}
+
+func noRules(string, string, int, TemporalBinding) []error { return nil }
+
+func requireField(action, field string, get func(TemporalBinding) string) func(method, path string, i int, t TemporalBinding) []error {
+	return func(method, path string, i int, t TemporalBinding) []error {
+		if get(t) == "" {
+			return []error{fmt.Errorf("%s %s: x-temporal.triggers[%d]: %s requires %s", method, path, i, action, field)}
+		}
+		return nil
+	}
+}
+
+// Actions lists every TemporalAction the spec accepts.
+func Actions() []TemporalAction {
+	return slices.Sorted(maps.Keys(actionRules))
+}
+
 // validateBinding checks one x-temporal.triggers[i] entry against the rules
 // for its declared Action, returning every problem found (not just the
 // first).
@@ -125,22 +154,9 @@ func validateBinding(method, path string, i int, t TemporalBinding) []error {
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: missing namespace", method, path, i))
 	}
 
-	switch t.Action {
-	case ActionStartWorkflow:
-		errs = append(errs, validateStartWorkflowBinding(method, path, i, t)...)
-	case ActionSignalWorkflow:
-		if t.SignalName == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: signalWorkflow requires signalName", method, path, i))
-		}
-	case ActionQueryWorkflow:
-		if t.QueryType == "" {
-			errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: queryWorkflow requires queryType", method, path, i))
-		}
-	case ActionCancelWorkflow, ActionTerminateWorkflow, ActionGetResult:
-		// no action-specific required fields beyond workflowId.
-	case "":
-		// already reported above as "missing action".
-	default:
+	if rule, ok := actionRules[t.Action]; ok {
+		errs = append(errs, rule(method, path, i, t)...)
+	} else if t.Action != "" { // empty is already reported as "missing action"
 		errs = append(errs, fmt.Errorf("%s %s: x-temporal.triggers[%d]: unknown action %q", method, path, i, t.Action))
 	}
 

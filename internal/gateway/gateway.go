@@ -9,25 +9,15 @@ import (
 	"net/http"
 	"time"
 
+	"temporal-gateway/internal/response"
 	"temporal-gateway/internal/spec"
 )
 
-// Dispatcher executes a route's Temporal action and returns a
-// JSON-serializable result. Implemented by *internal/temporal.Dispatcher.
+// Dispatcher executes a route's Temporal action. The Outcome's Body is
+// written as the response; its Status decides success and the HTTP code.
+// Implemented by *internal/temporal.Dispatcher.
 type Dispatcher interface {
-	Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (any, error)
-}
-
-// statusByAction is the HTTP status returned on success, per Temporal
-// action: actions that only kick off asynchronous work reply 202, actions
-// that return a result reply 200.
-var statusByAction = map[spec.TemporalAction]int{
-	spec.ActionStartWorkflow:     http.StatusAccepted,
-	spec.ActionSignalWorkflow:    http.StatusAccepted,
-	spec.ActionCancelWorkflow:    http.StatusAccepted,
-	spec.ActionTerminateWorkflow: http.StatusAccepted,
-	spec.ActionQueryWorkflow:     http.StatusOK,
-	spec.ActionGetResult:         http.StatusOK,
+	Dispatch(ctx context.Context, binding spec.TemporalBinding, workflowID string, body any) (response.Outcome, error)
 }
 
 // Options are the per-request limits every generated handler enforces.

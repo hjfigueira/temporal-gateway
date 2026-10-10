@@ -1,7 +1,7 @@
 # See .specs/adr/active/0010-response-envelope-separates-gateway-status-from-http-status.md
 # See .specs/adr/active/0014-http-server-hardening.md
 # See .specs/adr/active/0022-per-request-limits-and-sanitized-errors.md
-# Code: internal/response/response.go, main.go (newServer, serve),
+# Code: internal/response/response.go, internal/app/server.go (newServer, serve), internal/app/lifecycle.go (Run),
 #       internal/gateway/dispatch_handler.go (body limit, deadline, errorResponse)
 
 Feature: Response envelope and HTTP server hardening
@@ -90,7 +90,13 @@ Feature: Response envelope and HTTP server hardening
 
   Scenario: Every fallible startup stage returns an error instead of exiting directly
     Given any of: loading .env, config.Load, telemetry.Setup, spec.Load, temporal.ValidateBindings, or temporal Connections.Connect (giving up) fails
-    When run() executes
+    When app.Run drives the lifecycle modules
     Then it returns an error immediately, propagated up to main()
-    And deferred cleanup (closing Temporal connections, flushing telemetry) still runs before the process exits
-    And os.Exit is called exactly once, in main, after run() has fully unwound
+    And the Stop hook of every module whose Init succeeded (closing Temporal connections, flushing telemetry) still runs, in reverse module order, before the process exits
+    And os.Exit is called exactly once, in main, after app.Run has fully unwound
+
+  Scenario: A failing background stage stops the whole gateway
+    Given the API is serving and Temporal is dialing in the background
+    When one module's Run returns an error (e.g. the dial gives up)
+    Then every other module's Run is cancelled (the API drains and shuts down)
+    And app.Run returns that first error, not the cancellation errors that follow it
