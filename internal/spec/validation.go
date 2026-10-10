@@ -1,13 +1,13 @@
 package spec
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"time"
 
 	"temporal-gateway/internal/templating"
-	"temporal-gateway/internal/validate"
 )
 
 // validIDReusePolicies mirrors the WorkflowIDReusePolicy values the
@@ -60,17 +60,12 @@ var validReturnStrategies = map[ReturnStrategy]bool{
 // misconfigured spec can be fixed in one pass instead of being rediscovered
 // error-by-error.
 func (s *Spec) validate() error {
-	var errs []error
+	errs := s.validateRequestSchemas()
 	for path, item := range s.Paths {
 		for method, op := range item.operations() {
 			if len(op.Temporal.Triggers) == 0 {
 				errs = append(errs, fmt.Errorf("%s %s: missing x-temporal.triggers", method, path))
 				continue
-			}
-			if op.RequestBody != nil {
-				if err := validate.CheckSchema(op.RequestBody.Content["application/json"].Schema); err != nil {
-					errs = append(errs, fmt.Errorf("%s %s: requestBody schema: %w", method, path, err))
-				}
 			}
 			if !validReturnStrategies[op.Temporal.ReturnStrategy] {
 				errs = append(errs, fmt.Errorf("%s %s: x-temporal: unknown returnStrategy %q", method, path, op.Temporal.ReturnStrategy))
@@ -81,6 +76,40 @@ func (s *Spec) validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// validateRequestSchemas checks, with kin-openapi, every parameter and
+// request body requests are validated against, so a typo'd schema (an
+// unknown type, a pattern that doesn't compile) fails startup instead of
+// failing or silently passing requests (ADR-008, ADR-029). Responses aren't
+// checked: the gateway never validates them, and requiring them would
+// reject specs that load today.
+func (s *Spec) validateRequestSchemas() []error {
+	if s.doc == nil {
+		return nil
+	}
+	var errs []error
+	ctx := context.Background()
+	for path, item := range s.doc.Paths.Map() {
+		for _, p := range item.Parameters {
+			if err := p.Validate(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("%s: parameters: %w", path, err))
+			}
+		}
+		for method, op := range item.Operations() {
+			for _, p := range op.Parameters {
+				if err := p.Validate(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("%s %s: parameters: %w", method, path, err))
+				}
+			}
+			if op.RequestBody != nil {
+				if err := op.RequestBody.Validate(ctx); err != nil {
+					errs = append(errs, fmt.Errorf("%s %s: requestBody: %w", method, path, err))
+				}
+			}
+		}
+	}
+	return errs
 }
 
 // validateBinding checks one x-temporal.triggers[i] entry against the rules

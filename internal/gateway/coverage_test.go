@@ -86,16 +86,3 @@ func TestErrorResponse(t *testing.T) {
 		}
 	}
 }
-
-func TestValidateBodyWithoutSchema(t *testing.T) {
-	if r := validateBody(nil, map[string]any{}); r.Status.IsError() {
-		t.Errorf("nil requestBody: %+v", r)
-	}
-	if r := validateBody(&spec.RequestBody{}, nil); r.Status.IsError() {
-		t.Errorf("optional body, none sent: %+v", r)
-	}
-	rb := &spec.RequestBody{Content: map[string]spec.MediaType{"text/plain": {}}}
-	if r := validateBody(rb, map[string]any{"a": 1.0}); r.Status.IsError() {
-		t.Errorf("no application/json schema: %+v", r)
-	}
-}

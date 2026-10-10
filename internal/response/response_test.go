@@ -69,7 +69,7 @@ func TestStatusIsError(t *testing.T) {
 		}
 	}
 
-	successStatuses := []Status{StatusValid, StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated}
+	successStatuses := []Status{StatusStarted, StatusSignaled, StatusCancelled, StatusTerminated}
 	for _, s := range successStatuses {
 		if s.IsError() {
 			t.Errorf("%s.IsError() = true, want false", s)

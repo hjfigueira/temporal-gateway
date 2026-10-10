@@ -311,27 +311,37 @@ func TestValidateWorkflowIDPlaceholders(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsBadRequestBodySchema(t *testing.T) {
-	yamlContent := specHeader + `      requestBody:
+func TestValidateRejectsBadRequestSchemas(t *testing.T) {
+	// kin-openapi stops at the first problem inside one schema, so each
+	// mistake gets its own spec.
+	tests := []struct{ schema, want string }{
+		{`{type: strnig}`, `requestBody: unsupported 'type' value "strnig"`},
+		{`{type: string, pattern: "(["}`, "requestBody: error parsing regexp"},
+	}
+	for _, tt := range tests {
+		yamlContent := specHeader + `      parameters:
+        - {name: limit, in: query, schema: {type: integr}}
+      requestBody:
         content:
           application/json:
             schema:
               type: object
               properties:
-                sku: {type: strnig, pattern: "(["}
+                sku: ` + tt.schema + `
       x-temporal:
         triggers:
         - action: getResult
           namespace: default
           workflowId: "widget-1"
 `
-	_, err := loadSpec(t, yamlContent)
-	if err == nil {
-		t.Fatal("expected an error for an unknown type and an invalid pattern")
-	}
-	for _, want := range []string{"requestBody schema", `unknown type "strnig"`, "invalid pattern"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+		_, err := loadSpec(t, yamlContent)
+		if err == nil {
+			t.Fatalf("%s: expected an error", tt.schema)
+		}
+		for _, want := range []string{tt.want, `parameter "limit" schema is invalid: unsupported 'type' value "integr"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: error %q does not mention %q", tt.schema, err, want)
+			}
 		}
 	}
 }

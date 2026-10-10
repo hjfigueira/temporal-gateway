@@ -20,7 +20,7 @@ is built the way it is, and *what* each feature is supposed to do.
 | `multi-trigger-dispatch.feature` | `x-temporal.triggers` list, `returnStrategy`, concurrent dispatch, 207/409 |
 | `multi-namespace-temporal.feature` | `temporal.connections`, per-trigger namespace, startup validation, `temporal.reconnect` |
 | `workflow-id-templating.feature` | `{origin.field}` / `{uuidv7}` placeholders |
-| `request-validation.feature` | JSON Schema-lite body validation, field-level errors |
+| `request-validation.feature` | Request validation from the OpenAPI spec (kin-openapi): parameters, body, field-level errors |
 | `start-workflow-semantics.feature` | `startWorkflow` options, started-vs-attached, ID reuse/conflict, search attributes |
 | `other-temporal-actions.feature` | `signalWorkflow`, `queryWorkflow`, `cancelWorkflow`, `terminateWorkflow`, `getResult` |
 | `observability-tracing.feature` | OpenTelemetry spans and trace propagation into Temporal |

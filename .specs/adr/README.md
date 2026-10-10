@@ -29,7 +29,7 @@ which.
 | [0006](active/0006-terminateifrunning-reuse-policy-mapping.md) | `TerminateIfRunning` reuse policy mapped to non-deprecated primitives |
 | [0007](active/0007-typed-search-attributes.md) | Typed search attributes, not the deprecated untyped map |
 | [0008](active/0008-fail-fast-validation-at-startup.md) | Fail-fast validation at startup, not at request time |
-| [0009](active/0009-json-schema-lite-validator-with-laravel-style-messages.md) | Hand-rolled JSON-Schema-lite validator with Laravel-style messages |
+| [0009](deprecated/0009-json-schema-lite-validator-with-laravel-style-messages.md) | ~~Hand-rolled JSON-Schema-lite validator with Laravel-style messages~~ (superseded by 0029) |
 | [0010](active/0010-response-envelope-separates-gateway-status-from-http-status.md) | Response envelope separates gateway status from HTTP status |
 | [0011](active/0011-var-expansion-over-raw-config-bytes.md) | `${VAR}` / `${VAR:-default}` expansion over raw config bytes, before YAML parsing |
 | [0012](active/0012-multi-file-api-spec-merge.md) | Multi-file API spec merge, operation-granularity override |
@@ -49,7 +49,7 @@ which.
 | [0026](active/0026-serve-http-before-temporal-connects.md) | Serve HTTP immediately; Temporal readiness via probes |
 | [0027](active/0027-godotenv-for-dotenv-loading.md) | Load `.env` with `joho/godotenv`, not a hand-rolled parser |
 | [0028](active/0028-exact-json-numbers-in-request-bodies.md) | Exact JSON numbers in request bodies |
-| [0029](active/0029-request-body-schemas-checked-at-load.md) | Request body schemas are checked at load |
+| [0029](active/0029-validate-requests-with-kin-openapi.md) | Validate requests from the OpenAPI spec with kin-openapi |
 
 ## Adding a new decision
 

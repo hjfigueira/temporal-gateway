@@ -31,9 +31,9 @@ rendered with `fmt.Sprint`. In practice:
 - `{fingerprint(...)}` converts numbers to float64 before hashing, so every
   fingerprint is identical to what ADR-025 defined, and the ADR-025
   caveat about integers above 2⁵³ still applies to fingerprints only.
-- The validator (`internal/validate`) treats `json.Number` as a number.
-  `integer` now means "has no fractional part", so it no longer overflows
-  converting through `int64`.
+- Request validation decodes numbers as `json.Number` too (kin-openapi,
+  [ADR-029](0029-validate-requests-with-kin-openapi.md)), so `integer`
+  accepts values beyond 2⁵³.
 - A body with anything after its JSON value (`{"a":1} junk`, or two
   documents) is rejected with 422, like any other malformed JSON.
 

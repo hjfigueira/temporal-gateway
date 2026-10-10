@@ -11,7 +11,7 @@ Feature: Response envelope and HTTP server hardening
   clients and shuts down gracefully, draining in-flight requests.
 
   Scenario: Every response type embeds Envelope
-    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled, WorkflowAck, BatchResult, validate.Result)
+    Given any response the gateway writes (WorkflowStarted, WorkflowSignaled, WorkflowAck, BatchResult, ValidationFailed)
     When its JSON is inspected
     Then it includes a top-level "status" field
     And an optional "message" field

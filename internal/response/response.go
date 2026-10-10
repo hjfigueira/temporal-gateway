@@ -12,12 +12,11 @@ package response
 type Status string
 
 const (
-	// StatusValid Successful outcomes, one per Temporal action. StatusStarted means
+	// StatusStarted Successful outcomes, one per Temporal action. StatusStarted means
 	// ExecuteWorkflow actually created a new run - never assume this just
 	// because the call didn't error: WorkflowIDConflictPolicy/
 	// WorkflowIDReusePolicy can make it succeed by silently attaching to an
 	// existing run instead (see the StatusWorkflow* outcomes below).
-	StatusValid      Status = "VALID"
 	StatusStarted    Status = "STARTED"
 	StatusSignaled   Status = "SIGNALED"
 	StatusCancelled  Status = "CANCELLED"
@@ -122,4 +121,13 @@ type WorkflowAck struct {
 type BatchResult struct {
 	Envelope
 	Results []any `json:"results"`
+}
+
+// ValidationFailed is the 422 response for a request that doesn't match its
+// operation's OpenAPI parameters or request body: every problem found, keyed
+// by field ("query.limit", "customer.city", "items[1]", or "_body" for the
+// body as a whole).
+type ValidationFailed struct {
+	Envelope
+	Fields map[string][]string `json:"fields"`
 }

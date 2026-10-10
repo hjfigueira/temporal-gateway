@@ -19,8 +19,10 @@ dispatches the calls - no handler code to write or maintain.
 - **Templated workflow IDs** - `workflowId: "order-{path.orderId}-{body.customerId}"`,
   with `{origin.field}` placeholders (`path`, `body`, `query`, `header`) plus a
   `{uuidv7}` generator.
-- **Request validation** - the request body is validated against the operation's JSON
-  Schema before anything is dispatched, with Laravel-style field-level error messages.
+- **Request validation** - the OpenAPI spec is the validator: path, query and header
+  parameters and the JSON body are checked against the operation (via
+  [kin-openapi](https://github.com/getkin/kin-openapi)) before anything is dispatched,
+  with every problem reported per field.
 - **Accurate start semantics** - `startWorkflow` only reports `STARTED` when a new run
   was actually created; attaching to an existing run reports its real state
   (`WORKFLOW_RUNNING`, `WORKFLOW_COMPLETED`, ...) instead of a false positive.
@@ -314,9 +316,12 @@ gateway before it starts serving traffic.
 
 ## Request/response behavior
 
-- The JSON body is validated against the operation's `requestBody` schema before
-  dispatch; a failure returns **422** with a structured error naming every invalid
-  field, not just the first.
+- Every request is validated against its OpenAPI operation before dispatch: path,
+  query and header parameters, and the `requestBody` (its `required` flag, its
+  `Content-Type`, and its schema). A failure returns **422** `VALIDATION_FAILED` with
+  a `fields` map naming every problem, not just the first (e.g. `"query.limit"`,
+  `"items[1].sku"`, or `"_body"` for the body as a whole). A body sent without a
+  `Content-Type` is treated as JSON. The spec's `security` schemes are not enforced.
 - A route whose Temporal namespace isn't connected (yet), or a Temporal that reports
   itself unavailable, returns **503** (`UNAVAILABLE`).
 - A body over `server.maxBodyBytes` returns **413**; a dispatch exceeding
@@ -362,13 +367,12 @@ go test -race ./...
 main.go              entrypoint: loads config/spec, wires everything, serves HTTP
 internal/config      config.yml parsing
   envsubst/          ${VAR}/${VAR:-default} expansion (config.yml + api-spec.yaml)
-internal/spec        api-spec.yaml parsing + validation
-internal/gateway     HTTP handler generation, request validation, dispatch
+internal/spec        api-spec.yaml parsing + validation (kin-openapi doc + x-temporal)
+internal/gateway     HTTP handler generation, request validation (kin-openapi), dispatch
   health/            /livez + /readyz probe server (own port, ADR-019)
 internal/templating  workflowId placeholders: parsing, rendering, fingerprint
 internal/temporal    Temporal client(s), namespace connection pool, dispatch
-internal/validate    JSON Schema-lite request body validation
-internal/response    response envelope + status types (shared by gateway, temporal, validate)
+internal/response    response envelope + status types (shared by gateway and temporal)
 internal/telemetry   OpenTelemetry setup
 ```
 

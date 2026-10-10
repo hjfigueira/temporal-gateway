@@ -1,5 +1,7 @@
 # ADR-015: Auth and middleware config are parsed and logged, not yet enforced
 
+**Extended by [ADR-029](0029-validate-requests-with-kin-openapi.md)**: the API spec's own `security` schemes are likewise not enforced by request validation.
+
 **Status:** Accepted
 
 **Related features:** none yet — no `.feature` file covers enforcement,

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,15 +58,15 @@ func (o dispatchOutcome) succeeded() bool {
 	return true
 }
 
-// dispatchHandler decodes and validates the request, renders every
-// trigger's workflowId, then dispatches the operation's x-temporal.triggers
-// in parallel (see dispatchAll). One trigger reports its own result; more
+// dispatchHandler decodes the request, validates it against its OpenAPI
+// operation (see validateRequest), renders every trigger's workflowId, then
+// dispatches the operation's x-temporal.triggers in parallel (see
+// dispatchAll). One trigger reports its own result; more
 // than one report a response.BatchResult (see writeBatchResult).
 func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logger *slog.Logger) http.HandlerFunc {
 	paramNames := spec.PathParamNames(route.Path)
 	bindings := route.Operation.Temporal.Triggers
 	returnStrategy := route.Operation.Temporal.Strategy()
-	requestBody := route.Operation.RequestBody
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		// This is the first span for the request: its trace context flows
@@ -98,6 +99,7 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 			pathParams[name] = r.PathValue(name)
 		}
 
+		var raw []byte
 		var body any
 		if r.Body != nil {
 			// The error from closing a request body isn't actionable (the
@@ -108,7 +110,10 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 				r.Body = http.MaxBytesReader(w, r.Body, opts.MaxBodyBytes)
 			}
 			var err error
-			if body, err = decodeBody(r.Body); err != nil {
+			if raw, err = io.ReadAll(r.Body); err == nil {
+				body, err = decodeBody(bytes.NewReader(raw))
+			}
+			if err != nil {
 				span.RecordError(err)
 				var tooLarge *http.MaxBytesError
 				if errors.As(err, &tooLarge) {
@@ -122,9 +127,16 @@ func dispatchHandler(route spec.Route, dispatcher Dispatcher, opts Options, logg
 			}
 		}
 
-		if result := validateBody(requestBody, body); result.Status.IsError() {
-			span.SetStatus(codes.Error, string(result.Status))
-			writeJSON(w, http.StatusUnprocessableEntity, result)
+		if fields := validateRequest(ctx, route.OpenAPI, r, raw, pathParams); fields != nil {
+			span.SetStatus(codes.Error, string(response.StatusValidationFailed))
+			issues := 0
+			for _, messages := range fields {
+				issues += len(messages)
+			}
+			writeJSON(w, http.StatusUnprocessableEntity, response.ValidationFailed{
+				Envelope: response.Envelope{Status: response.StatusValidationFailed, Message: fmt.Sprintf("validation failed: %d issue(s) found", issues)},
+				Fields:   fields,
+			})
 			return
 		}
 

@@ -1,8 +1,8 @@
 # ADR-009: Hand-rolled JSON-Schema-lite validator with Laravel-style messages
 
-**Extended by [ADR-029](0029-request-body-schemas-checked-at-load.md)**: unknown `type` values and invalid `pattern`s now fail spec load; lengths count characters.
+**Superseded by [ADR-029](../active/0029-validate-requests-with-kin-openapi.md)**: requests are validated by kin-openapi straight from the spec; `internal/validate` is gone.
 
-**Status:** Accepted
+**Status:** Deprecated
 
 **Related features:** [`request-validation.feature`](../../features/request-validation.feature)
 

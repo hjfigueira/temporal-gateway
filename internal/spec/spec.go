@@ -15,8 +15,10 @@ package spec
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"gopkg.in/yaml.v3"
 
 	"temporal-gateway/internal/config/envsubst"
@@ -155,42 +157,15 @@ type Priority struct {
 	FairnessWeight float32 `yaml:"fairnessWeight,omitempty"`
 }
 
-// Parameter is an OpenAPI parameter declaration (path, query, or header).
-// The gateway only reads Name/In itself (see PathParamNames); Required and
-// Schema are carried through for documentation purposes only and are not
-// currently enforced.
-type Parameter struct {
-	Name     string         `yaml:"name"`
-	In       string         `yaml:"in"`
-	Required bool           `yaml:"required,omitempty"`
-	Schema   map[string]any `yaml:"schema,omitempty"`
-}
-
-// MediaType holds the JSON Schema for one content type of a RequestBody.
-// Only the "application/json" entry is read by the gateway (see
-// internal/gateway's validateBody).
-type MediaType struct {
-	Schema map[string]any `yaml:"schema,omitempty"`
-}
-
-// RequestBody is an OpenAPI requestBody declaration: Required governs
-// whether a missing body is rejected, and each Content entry's Schema is
-// validated against the decoded body (see internal/validate.Schema).
-type RequestBody struct {
-	Required bool                 `yaml:"required,omitempty"`
-	Content  map[string]MediaType `yaml:"content,omitempty"`
-}
-
-// Operation is one HTTP method entry under a path (OpenAPI's operation
-// object), extended with the "x-temporal" extension describing what it does
-// against Temporal.
+// Operation is the gateway's view of one HTTP method entry under a path
+// (OpenAPI's operation object): its id and the "x-temporal" extension
+// describing what it does against Temporal. Parameters, request bodies and
+// everything else OpenAPI describes are read by kin-openapi instead (see
+// Spec.doc and ADR-029).
 type Operation struct {
-	OperationID string         `yaml:"operationId"`
-	Summary     string         `yaml:"summary,omitempty"`
-	Parameters  []Parameter    `yaml:"parameters,omitempty"`
-	RequestBody *RequestBody   `yaml:"requestBody,omitempty"`
-	Responses   map[string]any `yaml:"responses,omitempty"`
-	Temporal    TemporalSpec   `yaml:"x-temporal"`
+	OperationID string       `yaml:"operationId"`
+	Summary     string       `yaml:"summary,omitempty"`
+	Temporal    TemporalSpec `yaml:"x-temporal"`
 }
 
 // PathItem is the set of HTTP methods declared for one path (OpenAPI's path
@@ -217,6 +192,11 @@ type Spec struct {
 	OpenAPI string              `yaml:"openapi"`
 	Info    Info                `yaml:"info"`
 	Paths   map[string]PathItem `yaml:"paths"`
+
+	// doc is the same files parsed and merged by kin-openapi, which
+	// validates requests against them (see Route.OpenAPI). Nil for a Spec
+	// built in code rather than by Load.
+	doc *openapi3.T
 }
 
 // Load reads each of paths, expands "${VAR}"/"${VAR:-default}" environment
@@ -266,6 +246,11 @@ func loadOne(path string) (*Spec, error) {
 		return nil, fmt.Errorf("spec: parse %q: %w", path, err)
 	}
 
+	// The file's own location resolves any relative $ref it makes.
+	if s.doc, err = openapi3.NewLoader().LoadFromDataWithPath(data, &url.URL{Path: path}); err != nil {
+		return nil, fmt.Errorf("spec: parse %q: %w", path, err)
+	}
+
 	return &s, nil
 }
 
@@ -283,6 +268,26 @@ func (s *Spec) merge(other *Spec) {
 
 	for path, item := range other.Paths {
 		s.Paths[path] = s.Paths[path].merge(item)
+	}
+
+	if s.doc == nil {
+		s.doc = other.doc
+		return
+	}
+	// Same operation-granularity override as above. Each file's $refs are
+	// already resolved into its own operations, so components need no merge.
+	for path, item := range other.doc.Paths.Map() {
+		existing := s.doc.Paths.Value(path)
+		if existing == nil {
+			s.doc.Paths.Set(path, item)
+			continue
+		}
+		if len(item.Parameters) > 0 {
+			existing.Parameters = item.Parameters
+		}
+		for method, op := range item.Operations() {
+			existing.SetOperation(method, op)
+		}
 	}
 }
 
